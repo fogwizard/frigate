@@ -11,7 +11,9 @@ function normalizeCameras(data) {
     if (typeof camera !== "string" || !camera.trim() || seen.has(camera)) continue;
     const number = typeof item === "object" && item.number != null ? String(item.number) : String(cameras.length + 1).padStart(2, "0");
     const label = typeof item === "object" && typeof item.label === "string" ? item.label : camera;
-    cameras.push({ camera, number, label: `${number}号 · ${label}` });
+    cameras.push({ camera, number, label: `${number}号 · ${label}`,
+      ...(typeof item === "object" && Object.prototype.hasOwnProperty.call(item, "canControl")
+        ? { canControl: item.canControl === true } : {}) });
     seen.add(camera);
     if (cameras.length === MAX_CAMERAS) break;
   }

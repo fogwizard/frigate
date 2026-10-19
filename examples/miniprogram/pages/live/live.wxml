@@ -1,14 +1,14 @@
 <view class="live-page">
   <view class="identity">
     <view class="identity-copy">
-      <text class="eyebrow">微信身份 · OpenID</text>
+      <text class="eyebrow">{{isAdmin ? '管理员' : '微信身份'}} · OpenID</text>
       <text class="identity-value" selectable>{{openid || (camerasLoading ? '正在登录' : '未登录')}}</text>
     </view>
   </view>
 
   <view class="camera-selection">
-    <button wx:if="{{!camerasLoading && !cameras.length}}" class="btn" bindtap="startBoarding">扫码寄养</button>
-    <text class="picker-label">寄养号码 / 镜头 · {{cameras.length}} 个</text>
+    <button wx:if="{{!isAdmin && !camerasLoading && !cameras.length}}" class="btn" bindtap="startBoarding">扫码寄养</button>
+    <text class="picker-label">{{isAdmin ? '全部镜头' : '寄养号码 / 镜头'}} · {{cameras.length}} 个</text>
     <picker mode="selector" range="{{cameras}}" range-key="label" value="{{cameraIndex}}" bindchange="selectCamera" disabled="{{!cameras.length || camerasLoading || feeding || watering}}">
       <view class="camera-picker">
         <text class="picker-value">{{cameras.length ? cameras[cameraIndex].label : (camerasLoading ? '正在加载镜头' : '暂无已授权镜头')}}</text>
@@ -48,14 +48,14 @@
     </view>
   </view>
 
-  <view class="feeding-section">
+  <view wx:if="{{!isAdmin || canControl}}" class="feeding-section">
     <text class="section-title">喂食控制</text>
     <button class="feed-button" bindtap="manualFeed" loading="{{feeding}}" disabled="{{!feedConfigured || !camera || feeding || cooldown}}">
       {{feeding ? '正在提交' : (cooldown ? '请稍候' : '手动喂食')}}
     </button>
     <text class="feed-status" aria-live="polite">{{feedConfigured ? feedStatus : '喂食服务未接入'}}</text>
   </view>
-  <view class="feeding-section">
+  <view wx:if="{{!isAdmin || canControl}}" class="feeding-section">
     <text class="section-title">喂水控制</text>
     <button class="feed-button water-button" bindtap="manualWater" loading="{{watering}}" disabled="{{!waterConfigured || !camera || watering || waterCooldown}}">
       {{watering ? '正在提交' : (waterCooldown ? '请稍候' : '手动喂水')}}

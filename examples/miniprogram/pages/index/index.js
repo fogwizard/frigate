@@ -1,6 +1,7 @@
 const api = require("../../utils/api");
 const door = require("../../utils/door");
 const { normalizeCameras } = require("../../utils/cameras");
+const logger = require("../../utils/logger");
 
 Page({
   data: {
@@ -9,6 +10,7 @@ Page({
     loading: false,
     error: "",
     openid: "",
+    isAdmin: false,
     doorConfigured: false,
     doorBusy: false,
     doorCooldown: false,
@@ -32,17 +34,18 @@ Page({
   reload() {
     if (this.data.loading || this.unloaded) return;
     const selected = this.data.cameras[this.data.cameraIndex];
-    this.setData({ loading: true, error: "", cameras: [] });
+    this.setData({ loading: true, error: "", cameras: [], isAdmin: false });
     return getApp().login()
-      .then(() => api.boardingCameras())
+      .then(() => api.accessibleCameras())
       .then((data) => {
         if (this.unloaded) return;
         const cameras = normalizeCameras(data);
         const cameraIndex = selected ? Math.max(0, cameras.findIndex((item) => item.camera === selected.camera)) : 0;
-        this.setData({ cameras, cameraIndex, loading: false, openid: getApp().globalData.openid });
+        this.setData({ cameras, cameraIndex, isAdmin: data.isAdmin, loading: false, openid: getApp().globalData.openid });
       })
       .catch((e) => {
         if (this.unloaded) return;
+        logger.warn("home.load_failed", { statusCode: e.statusCode });
         this.setData({ error: String(e.message || e), loading: false, cameras: [], openid: getApp().globalData.openid });
       });
   },
@@ -54,6 +57,7 @@ Page({
       return;
     }
     this.setData({ doorBusy: true, doorStatus: "" });
+    logger.info("door.flow_started", { operation: "door", outcome: "started" });
     let submitted = false;
     try {
       const allowed = await door.confirm({
@@ -68,6 +72,7 @@ Page({
       const qrToken = await door.scanDoorCode();
       if (this.unloaded) return;
       if (!qrToken) {
+        logger.info("door.scan_cancelled", { outcome: "cancelled" });
         this.setData({ doorStatus: "已取消扫码" });
         return;
       }
@@ -79,6 +84,7 @@ Page({
       });
       if (this.unloaded) return;
       if (!confirmed) {
+        logger.info("door.confirm_cancelled", { outcome: "cancelled" });
         this.setData({ doorStatus: "已取消开门" });
         return;
       }
@@ -91,6 +97,7 @@ Page({
       wx.showToast({ title: result.status === "opened" ? "门锁已开" : "申请已受理", icon: "success" });
     } catch (error) {
       if (this.unloaded) return;
+      logger.warn("door.flow_failed", { operation: "door", statusCode: error.statusCode, outcome: submitted ? "unknown" : "failed" });
       const denied = error.statusCode === 401 || error.statusCode === 403;
       const message = denied
         ? (error.statusCode === 401 ? "登录已失效，请重新扫码登录" : "没有此门店的开门权限")
@@ -125,16 +132,16 @@ Page({
     const selected = this.data.cameras[this.data.cameraIndex];
     if (this.data.loading || this.unloaded) return;
     if (!selected) {
-      wx.showToast({ title: "请先扫码寄养", icon: "none" });
+      wx.showToast({ title: this.data.isAdmin ? "暂无可查看镜头" : "请先扫码寄养", icon: "none" });
       return;
     }
     this.setData({ loading: true });
     try {
       await getApp().login();
-      const data = await api.boardingCameras();
+      const data = await api.accessibleCameras();
       if (this.unloaded) return;
       if (!data.cameras.some((item) => item.camera === selected.camera)) {
-        this.setData({ cameras: [], error: "没有有效寄养记录，请扫码寄养" });
+        this.setData({ cameras: [], isAdmin: data.isAdmin, error: data.isAdmin ? "当前镜头不可访问，请刷新列表" : "没有有效寄养记录，请扫码寄养" });
         return;
       }
       wx.navigateTo({ url: `/pages/live/live?camera=${encodeURIComponent(selected.camera)}` });

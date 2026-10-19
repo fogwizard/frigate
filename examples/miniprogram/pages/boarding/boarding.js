@@ -1,6 +1,7 @@
 const api = require("../../utils/api");
 const boarding = require("../../utils/boarding");
 const { confirm } = require("../../utils/door");
+const logger = require("../../utils/logger");
 
 Page({
   data: { busy: false, storeName: "", cages: [], cageIndex: 0, status: "", pending: false, canPay: false },
@@ -12,8 +13,10 @@ Page({
       if (this.unloaded) return;
       this.storageKey = `boarding-order:${getApp().globalData.openid}`;
       this.pendingOrder = wx.getStorageSync(this.storageKey) || null;
+      logger.info("boarding.pending_restored", { pending: !!this.pendingOrder });
       this.setData({ pending: !!this.pendingOrder, status: this.pendingOrder ? "有待确认的订单，请先查询支付结果" : "" });
     } catch (error) {
+      logger.error("boarding.load_failed", { statusCode: error.statusCode });
       if (!this.unloaded) this.setData({ status: error.message });
     } finally {
       if (!this.unloaded) this.setData({ busy: false });
@@ -34,8 +37,19 @@ Page({
     this.setData({ pending: false, canPay: false });
   },
 
+  async createPendingOrder() {
+    const order = await api.createBoardingOrder(this.pendingOrder.qrToken, this.pendingOrder.cageId, this.pendingOrder.requestId);
+    if (!order || typeof order.orderId !== "string" || !order.orderId) {
+      throw new Error("订单结果未确认，请查询支付结果");
+    }
+    this.savePending({ ...this.pendingOrder, orderId: order.orderId });
+    logger.info("boarding.order_created", { operation: "create_order", outcome: "success" });
+    return order;
+  },
+
   async scanBoarding() {
     if (this.data.busy || this.data.pending || this.unloaded) return;
+    logger.info("boarding.scan_started", { outcome: "started" });
     this.setData({ busy: true, status: "", cages: [], storeName: "" });
     try {
       await getApp().login();
@@ -48,14 +62,19 @@ Page({
           else reject(new Error("无法扫码，请检查相机权限"));
         },
       }));
-      if (!result || this.unloaded) return;
+      if (!result || this.unloaded) {
+        if (!result) logger.info("boarding.scan_cancelled", { outcome: "cancelled" });
+        return;
+      }
       const qrToken = boarding.parseBoardingCode(result.result);
       const data = await api.boardingCages(qrToken);
       if (this.unloaded) return;
       const cages = boarding.normalizeCages(data);
+      logger.info("boarding.cages_loaded", { count: cages.length });
       this.qrToken = qrToken;
       this.setData({ cages, cageIndex: 0, storeName: data.storeName, status: cages.length ? "" : "暂无可用笼位" });
     } catch (error) {
+      logger.warn("boarding.scan_failed", { statusCode: error.statusCode, outcome: "failed" });
       if (!this.unloaded) this.setData({ status: error.message });
     } finally {
       if (!this.unloaded) this.setData({ busy: false });
@@ -88,9 +107,7 @@ Page({
       }
       let order;
       if (!this.pendingOrder.orderId) {
-        order = await api.createBoardingOrder(this.pendingOrder.qrToken, this.pendingOrder.cageId, this.pendingOrder.requestId);
-        if (!order || typeof order.orderId !== "string" || !order.orderId) throw new Error("订单结果未确认，请查询支付结果");
-        this.savePending({ ...this.pendingOrder, orderId: order.orderId });
+        order = await this.createPendingOrder();
       } else {
         order = await api.boardingOrder(this.pendingOrder.orderId);
       }
@@ -108,9 +125,13 @@ Page({
         confirmText: "去支付" });
       if (!finalConfirmed || this.unloaded) return;
       paymentStarted = true;
+      logger.info("payment.started", { outcome: "started" });
       await new Promise((resolve, reject) => wx.requestPayment({ ...payment, success: resolve, fail: reject }));
+      logger.info("payment.client_completed", { outcome: "pending" });
       if (!this.unloaded) await this.resolveOrder();
     } catch (error) {
+      const cancelled = /cancel/i.test(error.errMsg || "");
+      logger.warn("payment.flow_incomplete", { outcome: cancelled ? "cancelled" : "failed", pending: !!this.pendingOrder, statusCode: error.statusCode });
       if (!this.unloaded) this.setData({ status: paymentStarted
         ? "支付结果待确认，请查询支付结果，勿重复付款"
         : `${error.message || "创建订单失败"}。如已有订单，请先查询结果` });
@@ -126,12 +147,11 @@ Page({
       await getApp().login();
       if (this.unloaded) return;
       if (!this.pendingOrder.orderId) {
-        const order = await api.createBoardingOrder(this.pendingOrder.qrToken, this.pendingOrder.cageId, this.pendingOrder.requestId);
-        if (!order || typeof order.orderId !== "string" || !order.orderId) throw new Error("订单结果未确认");
-        this.savePending({ ...this.pendingOrder, orderId: order.orderId });
+        await this.createPendingOrder();
       }
       if (!this.unloaded) await this.resolveOrder();
     } catch (error) {
+      logger.warn("payment.query_failed", { statusCode: error.statusCode, outcome: "failed" });
       if (!this.unloaded) this.setData({ status: `${error.message || "查询失败"}，请稍后查询或联系门店` });
     } finally {
       if (!this.unloaded) this.setData({ busy: false });
@@ -146,16 +166,20 @@ Page({
       const data = await api.boardingCameras();
       if (this.unloaded) return;
       if (!data.cameras.some((item) => item.camera === order.camera)) {
+        logger.warn("boarding.permissions_pending", { outcome: "pending" });
         this.setData({ status: "已支付，寄养权限尚未同步，请稍后查询" });
         return;
       }
       this.clearPending();
+      logger.info("boarding.activated", { outcome: "active" });
       this.setData({ status: "寄养已生效" });
       wx.redirectTo({ url: `/pages/live/live?camera=${encodeURIComponent(order.camera)}` });
     } else if (order && ["closed", "cancelled", "refunded"].includes(order.status)) {
+      logger.info("boarding.order_terminated", { outcome: order.status });
       this.clearPending();
       this.setData({ status: "订单已关闭或退款，可重新扫码寄养" });
     } else {
+      logger.info("boarding.activation_pending", { outcome: "pending" });
       this.setData({ status: order && order.paymentStatus === "paid"
         ? "已支付，等待寄养生效，请稍后查询" : "支付尚未确认，请查询结果或继续支付当前订单",
       canPay: !!order && order.paymentStatus === "pending" && order.status === "pending" });

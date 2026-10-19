@@ -11,14 +11,14 @@
   </button>
   <text class="door-status" aria-live="polite">{{doorConfigured ? doorStatus : '开门服务未接入'}}</text>
 </view>
-<view class="list-heading">我的寄养 · {{cameras.length}} 个镜头</view>
+<view class="list-heading">{{isAdmin ? '管理员 · 全部镜头' : '我的寄养'}} · {{cameras.length}} 个镜头</view>
 <button class="btn" bindtap="startBoarding" disabled="{{doorBusy}}">扫一扫寄养</button>
 
 <view wx:if="{{error}}" class="err">{{error}}</view>
-<view wx:if="{{!loading && !error && !cameras.length}}" class="hint">暂无有效寄养记录，请扫码寄养</view>
+<view wx:if="{{!loading && !error && !cameras.length}}" class="hint">{{isAdmin ? '暂无可查看镜头，请联系门店配置' : '暂无有效寄养记录，请扫码寄养'}}</view>
 
 <view wx:if="{{cameras.length}}" class="camera-selection">
-  <text class="picker-label">寄养号码 / 镜头</text>
+  <text class="picker-label">{{isAdmin ? '镜头编号' : '寄养号码 / 镜头'}}</text>
   <picker mode="selector" range="{{cameras}}" range-key="label" value="{{cameraIndex}}" bindchange="selectCamera" disabled="{{loading}}">
     <view class="camera-picker">
       <text class="picker-value">{{cameras[cameraIndex].label}}</text>

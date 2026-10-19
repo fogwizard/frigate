@@ -1,3 +1,6 @@
+const logger = require("./logger");
+let requestSequence = 0;
+
 function headers(authenticated) {
   const app = getApp();
   const h = { "content-type": "application/json" };
@@ -10,9 +13,15 @@ function headers(authenticated) {
 function request(path, options = {}) {
   const app = getApp();
   const authenticated = !options.public;
+  const operation = options.operation || "unknown";
   if (authenticated && !app.globalData.sessionToken) {
+    logger.warn("request.blocked", { operation, outcome: "denied" });
     return Promise.reject(new Error("请先完成微信登录"));
   }
+  const startedAt = Date.now();
+  const requestId = `req-${startedAt}-${++requestSequence}`;
+  const context = { requestId, operation };
+  logger.info("request.started", { ...context, outcome: "started" });
   return new Promise((resolve, reject) => {
     wx.request({
       url: `${app.globalData.apiBase}${path}`,
@@ -21,12 +30,17 @@ function request(path, options = {}) {
       timeout: 15000,
       header: headers(authenticated),
       success(res) {
+        const details = { ...context, statusCode: res.statusCode, elapsedMs: Date.now() - startedAt };
         if (res.statusCode >= 200 && res.statusCode < 300) {
+          logger.info("request.completed", { ...details, outcome: "success" });
           resolve(res.data);
         } else {
+          logger.warn("request.completed", { ...details, outcome: res.statusCode === 403 ? "denied" : "failed" });
           if (authenticated && res.statusCode === 401) {
             app.globalData.sessionToken = "";
             app.globalData.openid = "";
+            app.globalData.role = "user";
+            logger.warn("session.expired", { ...context, statusCode: 401 });
           }
           const error = new Error(res.statusCode === 401
             ? "登录已失效，请刷新重新登录"
@@ -36,6 +50,7 @@ function request(path, options = {}) {
         }
       },
       fail(error) {
+        logger.error("request.network_failed", { ...context, elapsedMs: Date.now() - startedAt, outcome: "failed" });
         reject(new Error(error.errMsg || "网络请求失败"));
       },
     });
@@ -47,11 +62,27 @@ function loginWithCode(code) {
   if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) {
     return Promise.reject(new Error("尚未配置有效的登录接口"));
   }
-  return request(path, { method: "POST", data: { code }, public: true });
+  return request(path, { method: "POST", data: { code }, public: true, operation: "login" });
 }
 
 function listStreams() {
-  return request("/api/streams");
+  return request("/api/streams", { operation: "streams" });
+}
+
+function accessibleCameras() {
+  if (getApp().globalData.role !== "admin") {
+    return boardingCameras().then((data) => {
+      logger.info("cameras.loaded", { isAdmin: false, count: data.cameras.length });
+      return { ...data, isAdmin: false };
+    });
+  }
+  return listStreams().then((data) => {
+    if (!data || !Array.isArray(data.cameras)) throw new Error("镜头列表格式错误");
+    logger.info("cameras.loaded", { isAdmin: true, count: data.cameras.length });
+    return { isAdmin: true, cameras: data.cameras.map((item) => typeof item === "string"
+      ? { camera: item, canControl: false }
+      : item && { camera: item.camera, number: item.number, label: item.label, canControl: item.canControl === true }) };
+  });
 }
 
 function boardingRequest(path, options) {
@@ -63,7 +94,7 @@ function boardingRequest(path, options) {
 }
 
 function boardingCameras() {
-  return boardingRequest("/records").then((data) => {
+  return boardingRequest("/records", { operation: "records" }).then((data) => {
     if (!data || !Array.isArray(data.records)) throw new Error("寄养记录格式错误");
     return { cameras: data.records.filter((record) => record && record.status === "active" &&
       record.paymentStatus === "paid" && typeof record.id === "string" && record.id &&
@@ -74,42 +105,54 @@ function boardingCameras() {
 }
 
 function boardingCages(qrToken) {
-  return boardingRequest("/cages", { method: "POST", data: { qrToken } });
+  return boardingRequest("/cages", { method: "POST", data: { qrToken }, operation: "cages" });
 }
 
 function createBoardingOrder(qrToken, cageId, requestId) {
-  return boardingRequest("/orders", { method: "POST", data: { qrToken, cageId, requestId } });
+  return boardingRequest("/orders", { method: "POST", data: { qrToken, cageId, requestId }, operation: "create_order" });
 }
 
 function boardingOrder(orderId) {
-  return boardingRequest(`/orders/${encodeURIComponent(orderId)}`);
+  return boardingRequest(`/orders/${encodeURIComponent(orderId)}`, { operation: "order" });
 }
 
 function playUrl(camera) {
-  return request(`/api/streams/${encodeURIComponent(camera)}/play`);
+  return request(`/api/streams/${encodeURIComponent(camera)}/play`, { operation: "play" });
 }
 
-function deviceAction(camera, path, label) {
+function deviceAction(camera, path, label, operation) {
   if (!path || !path.startsWith("/") || path.startsWith("//")) {
     return Promise.reject(new Error(`尚未配置有效的${label}接口`));
   }
   if (!camera) {
     return Promise.reject(new Error("请选择设备"));
   }
-  return request(path, { method: "POST", data: { camera } }).then((data) => {
+  const submit = () => request(path, { method: "POST", data: { camera }, operation }).then((data) => {
     if (data && data.success === false) {
+      logger.warn("device.rejected", { operation, outcome: "denied" });
       throw new Error(data.error || data.message || `${label}请求未被接受`);
     }
+    logger.info("device.submitted", { operation, outcome: "accepted" });
     return data;
   });
+  if (getApp().globalData.role === "admin") {
+    return accessibleCameras().then((data) => {
+      if (!data.isAdmin || !data.cameras.some((item) => item && item.camera === camera && item.canControl === true)) {
+        logger.warn("device.permission_denied", { operation, isAdmin: true, outcome: "denied" });
+        throw new Error(`管理员无此镜头的${label}权限`);
+      }
+      return submit();
+    });
+  }
+  return submit();
 }
 
 function feed(camera) {
-  return deviceAction(camera, getApp().globalData.feedPath, "喂食");
+  return deviceAction(camera, getApp().globalData.feedPath, "喂食", "feed");
 }
 
 function water(camera) {
-  return deviceAction(camera, getApp().globalData.waterPath, "喂水");
+  return deviceAction(camera, getApp().globalData.waterPath, "喂水", "water");
 }
 
 function openDoor(qrToken) {
@@ -120,15 +163,17 @@ function openDoor(qrToken) {
   if (typeof qrToken !== "string" || !/^[A-Za-z0-9_-]{16,512}$/.test(qrToken)) {
     return Promise.reject(new Error("无效的门店二维码凭证"));
   }
-  return request(path, { method: "POST", data: { qrToken } }).then((data) => {
+  return request(path, { method: "POST", data: { qrToken }, operation: "door" }).then((data) => {
     if (!data || data.success !== true || !["accepted", "opened"].includes(data.status)) {
       throw new Error((data && (data.error || data.message)) || "未确认开门结果，请核实门锁状态");
     }
+    logger.info("door.result", { outcome: data.status });
     return data;
   });
 }
 
 module.exports = {
+  accessibleCameras,
   boardingCameras,
   boardingCages,
   createBoardingOrder,

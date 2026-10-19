@@ -1,4 +1,5 @@
 const api = require("./utils/api");
+const logger = require("./utils/logger");
 
 App({
   globalData: {
@@ -11,6 +12,7 @@ App({
     boardingPath: "",
     openid: "",
     sessionToken: "",
+    role: "user",
   },
 
   login() {
@@ -18,6 +20,7 @@ App({
       return Promise.resolve(this.globalData.openid);
     }
     if (this.loginPromise) return this.loginPromise;
+    logger.info("login.started", { operation: "login", outcome: "started" });
     this.loginPromise = new Promise((resolve, reject) => {
       wx.login({
         timeout: 15000,
@@ -37,7 +40,12 @@ App({
       }
       this.globalData.openid = session.openid;
       this.globalData.sessionToken = session.token;
+      this.globalData.role = session.role === "admin" ? "admin" : "user";
+      logger.info("login.completed", { operation: "login", outcome: "success", isAdmin: this.globalData.role === "admin" });
       return session.openid;
+    }).catch((error) => {
+      logger.error("login.failed", { operation: "login", outcome: "failed", statusCode: error.statusCode });
+      throw error;
     }).finally(() => {
       this.loginPromise = null;
     });

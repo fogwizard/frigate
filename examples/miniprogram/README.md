@@ -1,5 +1,8 @@
 # Vigil 微信小程序示例（HTTP-FLV 预览）
 
+**当前尚未联调成功。** 自动化测试使用模拟响应，不代表真实登录、支付、视频或设备执行成功。
+部署、运行、配置修改及分阶段排查请先阅读 [部署与调试手顺](DEBUGGING.md)。
+
 对接 Vigil：
 
 - `GET {boardingPath}/records` — 当前用户的寄养记录
@@ -41,7 +44,7 @@ AppSecret、微信 session_key 只留在后端，不得返回给小程序。
 ## 多寄养镜头选择
 
 首页和直播页均使用号码下拉框，最多显示 64 个不重复的授权镜头。
-镜头入口只来自当前用户已支付且有效的寄养记录，不再使用普通流列表放行。
+普通用户的镜头入口只来自当前用户已支付且有效的寄养记录，不再使用普通流列表放行；管理员例外见下文。
 `GET {boardingPath}/records` 响应格式：
 
 ```json
@@ -62,9 +65,46 @@ AppSecret、微信 session_key 只留在后端，不得返回给小程序。
 播放或设备操作返回 401/403 时清空当前直播访问状态，点击刷新可重新登录或加载授权列表。
 服务端仍必须逐次验证播放、喂食和喂水权限；前端列表校验不能实现真正的用户隔离。
 
+## 管理员查看全部镜头
+
+管理员不需要选笼位、付款或创建寄养记录即可查看镜头。后端登录接口需根据数据库中当前 OpenID 的角色返回：
+
+```json
+{"openid":"管理员的微信标识","token":"管理员会话令牌","role":"admin"}
+```
+
+仅精确的 `role: "admin"` 启用此浏览分支；不返回 role 或其他值均按普通用户处理。
+角色由后端决定，不在小程序中设置管理员名单，也不能通过手改 `app.js` 真正获得权限。
+角色仅保存在当前登录会话内存中，重新登录时刷新；401 时清空身份并重置角色。
+
+管理员的首页和直播页读取 `GET /api/streams`，不查询寄养记录，因此无需配置 `boardingPath` 就能浏览。
+服务端必须从会话令牌识别管理员并返回管理范围内全部镜头，不得因客户端请求该路径就放行。
+管理员页面显示“管理员 · 全部镜头”，进入视频仍逐次请求签名播放地址，默认打开第一个镜头，可用下拉框切换。
+沿用默认最多 64 个镜头的展示限制，不会要求先去寄养页面选笼位。
+普通用户只请求寄养记录，即使没有记录，也不会回退到全部镜头接口。
+管理员的列表或播放请求失败时同样不绕过后端授权；管理员无镜头时显示配置提示，不要求扫码寄养。
+
+管理员镜头列表响应示例：
+
+```json
+{"cameras":[
+	{"camera":"room_01","number":"01","label":"寄养房 A","canControl":false},
+	{"camera":"room_02","number":"02","label":"寄养房 B","canControl":true}
+]}
+```
+
+也兼容 `{"cameras":["room_01","room_02"]}`，此时管理员默认仅可观看。
+管理员按当前镜头的 `canControl` 决定控制权限：后端明确返回布尔值 `true` 时，显示喂食、喂水入口；`false`、未返回或字符串 `"true"` 时只可观看。
+页面随镜头切换更新控制权限，不把一个镜头的权限带到其他镜头。管理员每次喂食、喂水请求前重新查询镜头列表，确认目标镜头仍有 `canControl: true` 才发送设备指令。
+启用控制还需在 `app.js` 配置真实的 `feedPath` 和 `waterPath`；无需为管理员创建寄养记录。
+普通用户仍按有效寄养记录使用喂食和喂水功能，不受管理员条件控制规则影响。
+服务端必须对每次喂食、喂水请求独立检查当前用户对目标镜头的控制权限，无权限时返回 403；不信任客户端字段或列表检查，前端限制不能代替服务端权限校验。
+管理员播放接口应允许有对应查看权限的管理员在无寄养记录时访问；普通用户继续要求有效且已支付的寄养记录。
+撤销管理员角色后，服务端应立即失效原会话或在每次请求重新验证角色，不应等待客户端刷新才撤销权限。
+
 ## 扫码寄养与支付
 
-首页增加“扫一扫寄养”，无有效记录时提示扫码寄养，不允许进入视频。
+首页增加“扫一扫寄养”，普通用户无有效记录时提示扫码寄养，不允许进入视频；管理员查看视频不受此限制。
 寄养页面流程：微信登录 -> 扫描门店寄养二维码 -> 选择可用笼位 -> 确认寄养 -> 后端创建订单 -> 确认订单最终金额 -> 微信支付 -> 查询服务端支付及寄养状态 -> 进入对应镜头。
 已有有效记录的用户可继续扫码新增其他寄养，镜头下拉框展示最多 64 个不同笼位镜头。
 
@@ -223,5 +263,31 @@ Content-Type: application/json
 
 ## 验证
 
-在 `examples` 目录执行 `node --test ./miniprogram/tests/boarding-page.test.js ./miniprogram/tests/boarding.test.js ./miniprogram/tests/cameras.test.js ./miniprogram/tests/feeding.test.js ./miniprogram/tests/door.test.js`，验证寄养支付、多镜头选择、登录鉴权、喂食喂水、二维码解析、开门确认、权限拒绝与异常保护。
+在 `examples` 目录执行 `node --test --test-reporter=dot ./miniprogram/tests/logger.test.js ./miniprogram/tests/admin.test.js ./miniprogram/tests/boarding-page.test.js ./miniprogram/tests/boarding.test.js ./miniprogram/tests/cameras.test.js ./miniprogram/tests/feeding.test.js ./miniprogram/tests/door.test.js`，验证日志脱敏、管理员例外、寄养支付、多镜头选择、登录鉴权、喂食喂水、二维码解析、开门确认、权限拒绝与异常保护。
 视频播放、原生组件布局与真实设备喂食、喂水仍需使用微信开发者工具及真机联调；普通浏览器无法运行该小程序。
+
+## 日志与排查
+
+日志统一通过 `utils/logger.js` 输出到微信开发者工具 Console，真机可通过真机调试查看。
+按 `[miniprogram]` 或事件名筛选；info 记录流程关键节点，warn 记录拒绝、取消后的不确定状态或等待生效，error 记录网络、登录和播放器故障。
+不会对每一帧播放或每次缓存命中打印日志，播放器仅在播放、缓冲状态变化及异常时输出。
+
+关键事件：
+
+- `login.started/completed/failed`：微信登录与后端会话交换；completed 中的 isAdmin 表示当前角色。
+- `request.started/completed/network_failed/blocked`：请求生命周期；同一请求使用相同 requestId，operation 是稳定操作名，elapsedMs 是耗时，statusCode 是 HTTP 状态。
+- `session.expired`：401 导致用户会话及角色已清空，需要重新登录。
+- `cameras.loaded`、`video.camera_selected`：镜头列表数量、身份与当前镜头控制权限，不输出镜头名称或标识。
+- `video.url_missing/playing/buffering/interrupted/player_failed`：签名地址缺失、播放与播放器错误码，不输出原始播放器对象。
+- `device.blocked/permission_denied/rejected/submitted/result_uncertain`：前端阻止、后端拒绝、指令受理或结果未知。
+- `boarding.pending_restored/order_created/cages_loaded`：待确认订单恢复、创建与可用笼位数。
+- `payment.started/client_completed/flow_incomplete/query_failed`：支付调用与结果查询；client_completed 的 outcome 为 pending，不代表后端确认收款。
+- `boarding.permissions_pending/activation_pending/activated/order_terminated`：支付后的寄养授权进度。
+- `door.flow_started/scan_cancelled/confirm_cancelled/flow_failed/result`：扫码开门各阶段；accepted 与 opened 含义不同。
+
+requestId 仅为客户端本次运行内的日志关联编号，不是支付幂等 requestId，也未作为服务端链路追踪头发送。
+日志只允许预定义字段和枚举值，不记录请求体、响应体、Header、完整路径、OpenID、登录 code、会话令牌、二维码凭证、订单标识、支付签名或签名视频地址，也不直接打印原始异常消息。
+不要在排查时改为打印整个接口返回、订单或播放器事件对象。
+
+建议按请求 operation 和 requestId 查找错误：401 检查登录，403 检查目标设备权限，network_failed 检查网络和合法域名；支付出现 client_completed 后持续 activation_pending 时需检查后端微信通知处理和寄养记录生成。
+device.submitted 或 door.result=accepted 仅表示服务端受理，不代表设备已实际执行，需结合服务端与设备日志核实。
