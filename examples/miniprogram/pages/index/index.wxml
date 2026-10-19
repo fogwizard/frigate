@@ -1,10 +1,18 @@
-<view class="hint">从 Vigil /api/streams 拉取可预览相机</view>
+<view class="account-bar">
+  <view class="account-copy">
+    <text class="hint">微信 ID</text>
+    <text class="account-id" selectable>{{wechatId || '未设置'}}</text>
+  </view>
+  <button class="text-button" bindtap="editWechatId">{{wechatId ? '修改' : '设置'}}</button>
+</view>
+<view class="list-heading">我的设备</view>
 
 <view wx:if="{{error}}" class="err">{{error}}</view>
+<view wx:if="{{!loading && !error && !cameras.length}}" class="hint">暂无设备</view>
 
 <view wx:for="{{cameras}}" wx:key="*this" class="row" bindtap="openLive" data-cam="{{item}}">
   <text>{{item}}</text>
   <text class="arrow">预览</text>
 </view>
 
-<button class="btn" bindtap="reload" loading="{{loading}}">刷新</button>
+<button class="btn" bindtap="reload" loading="{{loading}}" disabled="{{loading}}">刷新设备</button>

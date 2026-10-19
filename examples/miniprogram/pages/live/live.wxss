@@ -1,5 +1,157 @@
-.player {
+.live-page {
+  padding: 16rpx 32rpx 48rpx;
+  padding-bottom: calc(48rpx + env(safe-area-inset-bottom));
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 0 36rpx;
+  border-bottom: 1rpx solid #dce2e0;
+}
+
+.identity-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.eyebrow {
+  display: block;
+  color: #67726f;
+  font-size: 24rpx;
+  margin-bottom: 10rpx;
+}
+
+.identity-value {
+  display: block;
+  font-size: 36rpx;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.video-section {
+  margin-top: 40rpx;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20rpx;
+}
+
+.device-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  word-break: break-all;
+  margin-right: 20rpx;
+}
+
+.stream-status {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: #727b78;
+  font-size: 23rpx;
+}
+
+.status-dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background: #939c98;
+  margin-right: 10rpx;
+}
+
+.is-online {
+  color: #167753;
+}
+
+.is-online .status-dot {
+  background: #167753;
+}
+
+.video-frame {
+  height: 386rpx;
+  overflow: hidden;
+  border-radius: 12rpx;
+  background: #161c1a;
+}
+
+.player,
+.video-placeholder {
   width: 100%;
-  height: 420rpx;
-  background: #000;
+  height: 100%;
+}
+
+.video-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #c0cbc6;
+  font-size: 26rpx;
+}
+
+.video-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 84rpx;
+}
+
+.video-message {
+  flex: 1;
+  min-width: 0;
+  font-size: 23rpx;
+  color: #67726f;
+  word-break: break-all;
+  margin-right: 16rpx;
+}
+
+.error-text {
+  color: #b43e3e;
+}
+
+.feeding-section {
+  margin-top: 40rpx;
+  padding-top: 32rpx;
+  border-top: 1rpx solid #dce2e0;
+}
+
+.section-title {
+  display: block;
+  font-size: 28rpx;
+  font-weight: 600;
+  margin-bottom: 24rpx;
+}
+
+.feed-button {
+  width: 100%;
+  min-height: 100rpx;
+  line-height: 100rpx;
+  background: #167753;
+  color: #fff;
+  font-size: 32rpx;
+  font-weight: 600;
+  border-radius: 12rpx;
+}
+
+.water-button {
+  background: #256f9b;
+}
+
+.feed-button[disabled] {
+  background: #dce5e0;
+  color: #718179;
+}
+
+.feed-status {
+  display: block;
+  min-height: 64rpx;
+  margin-top: 20rpx;
+  color: #67726f;
+  font-size: 24rpx;
+  text-align: center;
 }

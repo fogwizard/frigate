@@ -1,23 +1,41 @@
 page {
-  background: #111;
-  color: #eee;
+  background: #f5f7f6;
+  color: #202b26;
   font-size: 28rpx;
   min-height: 100vh;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0;
 }
 
 .btn {
   margin: 24rpx;
-  background: #2a6df4;
+  background: #167753;
   color: #fff;
 }
 
 .err {
-  color: #f66;
+  color: #b43e3e;
   padding: 24rpx;
 }
 
 .hint {
-  color: #888;
+  color: #67726f;
   padding: 16rpx 24rpx;
   font-size: 24rpx;
+}
+
+.text-button {
+  flex-shrink: 0;
+  margin: 0 0 0 24rpx;
+  padding: 12rpx 0 12rpx 12rpx;
+  background: transparent;
+  color: #167753;
+  font-size: 26rpx;
+  line-height: 1.6;
+  border-radius: 0;
+}
+
+.text-button::after,
+.feed-button::after {
+  border: none;
 }

@@ -1,18 +1,55 @@
-<view class="hint">{{camera}} · 签名 URL 约 2 分钟过期，失败可点刷新</view>
+<view class="live-page">
+  <view class="identity">
+    <view class="identity-copy">
+      <text class="eyebrow">微信 ID</text>
+      <text class="identity-value" selectable>{{wechatId || '未设置'}}</text>
+    </view>
+    <button class="text-button" bindtap="editWechatId">{{wechatId ? '修改' : '设置'}}</button>
+  </view>
 
-<view wx:if="{{error}}" class="err">{{error}}</view>
+  <view class="video-section">
+    <view class="section-heading">
+      <text class="device-name">{{camera || '实时画面'}}</text>
+      <view class="stream-status {{playing ? 'is-online' : ''}}">
+        <view class="status-dot"></view>
+        <text>{{playing ? '直播中' : (error ? '未连接' : '连接中')}}</text>
+      </view>
+    </view>
+    <view class="video-frame">
+      <live-player
+        wx:if="{{flvUrl}}"
+        id="player"
+        class="player"
+        src="{{flvUrl}}"
+        mode="live"
+        autoplay
+        muted
+        object-fit="contain"
+        bindstatechange="onState"
+        binderror="onPlayerError"
+      />
+      <view wx:else class="video-placeholder">
+        <text>{{loading ? '正在连接视频' : '暂无视频画面'}}</text>
+      </view>
+    </view>
+    <view class="video-footer">
+      <text class="video-message {{error ? 'error-text' : ''}}">{{error || (playing ? '实时视频' : '等待视频画面')}}</text>
+      <button class="text-button" bindtap="refresh" loading="{{loading}}" disabled="{{loading}}">刷新画面</button>
+    </view>
+  </view>
 
-<live-player
-  wx:if="{{flvUrl}}"
-  id="player"
-  class="player"
-  src="{{flvUrl}}"
-  mode="live"
-  autoplay
-  muted
-  object-fit="contain"
-  bindstatechange="onState"
-  binderror="onPlayerError"
-/>
-
-<button class="btn" bindtap="refresh" loading="{{loading}}">刷新拉流地址</button>
+  <view class="feeding-section">
+    <text class="section-title">喂食控制</text>
+    <button class="feed-button" bindtap="manualFeed" loading="{{feeding}}" disabled="{{!feedConfigured || !camera || feeding || cooldown}}">
+      {{feeding ? '正在提交' : (cooldown ? '请稍候' : '手动喂食')}}
+    </button>
+    <text class="feed-status" aria-live="polite">{{feedConfigured ? feedStatus : '喂食服务未接入'}}</text>
+  </view>
+  <view class="feeding-section">
+    <text class="section-title">喂水控制</text>
+    <button class="feed-button water-button" bindtap="manualWater" loading="{{watering}}" disabled="{{!waterConfigured || !camera || watering || waterCooldown}}">
+      {{watering ? '正在提交' : (waterCooldown ? '请稍候' : '手动喂水')}}
+    </button>
+    <text class="feed-status" aria-live="polite">{{waterConfigured ? waterStatus : '喂水服务未接入'}}</text>
+  </view>
+</view>

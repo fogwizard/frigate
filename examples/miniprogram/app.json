@@ -4,10 +4,10 @@
     "pages/live/live"
   ],
   "window": {
-    "navigationBarTitleText": "Vigil 预览",
-    "navigationBarBackgroundColor": "#111111",
-    "navigationBarTextStyle": "white",
-    "backgroundColor": "#111111"
+    "navigationBarTitleText": "视频喂食",
+    "navigationBarBackgroundColor": "#f5f7f6",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f7f6"
   },
   "style": "v2",
   "sitemapLocation": "sitemap.json"

@@ -3,10 +3,42 @@
   justify-content: space-between;
   align-items: center;
   padding: 28rpx 32rpx;
-  border-bottom: 1rpx solid #333;
+  border-bottom: 1rpx solid #dce2e0;
+  word-break: break-all;
 }
 
 .arrow {
-  color: #2a6df4;
+  color: #167753;
   font-size: 26rpx;
+  flex-shrink: 0;
+  margin-left: 24rpx;
+}
+
+.account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 32rpx;
+  border-bottom: 1rpx solid #dce2e0;
+}
+
+.account-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-copy .hint {
+  display: block;
+  padding: 0 0 10rpx;
+}
+
+.account-id {
+  font-size: 36rpx;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.list-heading {
+  padding: 36rpx 32rpx 12rpx;
+  font-weight: 600;
 }
