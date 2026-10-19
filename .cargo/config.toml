@@ -1,0 +1,3 @@
+# Keep artifacts in-repo so local `target/` is visible (not a sandbox cache).
+[build]
+target-dir = "target"

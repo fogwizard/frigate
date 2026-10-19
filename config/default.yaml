@@ -1,0 +1,99 @@
+# Vigil NVR — default configuration
+# Copy to /etc/vigil/config.yaml on install and edit camera RTSP URLs.
+
+mqtt: null
+
+detect:
+  fps: 5
+  # Raw RGB24 pipe size (no JPEG). Must fit infer.shm_slot_bytes.
+  width: 640
+  height: 360
+  labels: [person, cat, dog]
+  score_threshold: 0.5
+
+openvino:
+  # device hint (ORT currently uses CPU; GPU EP reserved)
+  device: CPU
+  # YOLO11n / YOLOv8 ONNX (export: python scripts/export_model.py)
+  # demo: powershell -File scripts/download_demo_model.ps1
+  model: models/yolo11n.onnx
+
+ffmpeg:
+  # 改成你的 ffmpeg 路径；须能拉到下方 cameras 的 RTSP 才有画面
+  binary: "C:/Users/jwi4szh/Desktop/prog/ffmpeg-2022-11-03-git-5ccd4d3060-full_build/bin/ffmpeg.exe"
+
+infer:
+  # Linux production: /run/vigil/infer.sock
+  # Dev / Windows: 127.0.0.1:9870
+  endpoint: "127.0.0.1:9870"
+  binary: vigil-infer
+  queue_size: 32
+  # Frame ring in mmap (multi-slot cache); IPC only sends slot+seq
+  shm_path: data/frames.shm
+  shm_slots: 64
+  shm_slot_bytes: 2764800
+
+# 下面是占位地址（本机 8554 没有流时页面会黑屏/无信号）。
+# 请改成真实摄像头 RTSP，例如：
+#   rtsp://user:pass@192.168.1.10:554/Streaming/Channels/101
+cameras:
+  cam1:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/cam1
+          roles: [record, detect]
+  cam2:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/cam2
+          roles: [record, detect]
+  cam3:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/cam3
+          roles: [record, detect]
+  cam4:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/cam4
+          roles: [record, detect]
+  cam5:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/cam5
+          roles: [record, detect]
+
+record:
+  enabled: true
+  retain_days: 7
+  segment_secs: 60
+
+events:
+  retain_days: 14
+  pre_capture_secs: 5
+  post_capture_secs: 5
+
+# webhook:
+#   url: http://127.0.0.1:9000/hook
+
+web:
+  bind: "0.0.0.0:8970"
+
+# WeChat mini-program HTTP-FLV (MediaMTX + Nginx). API off by default.
+# Restream: Vigil FFmpeg publishes to MediaMTX so the camera is only opened once.
+# See packaging/mediamtx.yml and packaging/nginx-flv.conf.example
+stream:
+  enabled: false
+  restream: true
+  # Must match MediaMTX rtspAddress + path name (publisher)
+  publish_url_template: "rtsp://127.0.0.1:8554/{camera}"
+  public_base: "https://stream.example.com"
+  path_template: "/{camera}"
+  sign_secret: "change-me"
+  sign_ttl_secs: 120
+  # Required on /api/streams* when non-empty
+  api_token: ""
+
+paths:
+  data_dir: data
+  db_path: data/vigil.db

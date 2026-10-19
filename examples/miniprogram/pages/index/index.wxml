@@ -1,0 +1,10 @@
+<view class="hint">从 Vigil /api/streams 拉取可预览相机</view>
+
+<view wx:if="{{error}}" class="err">{{error}}</view>
+
+<view wx:for="{{cameras}}" wx:key="*this" class="row" bindtap="openLive" data-cam="{{item}}">
+  <text>{{item}}</text>
+  <text class="arrow">预览</text>
+</view>
+
+<button class="btn" bindtap="reload" loading="{{loading}}">刷新</button>

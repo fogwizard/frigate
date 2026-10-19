@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vigil NVR</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">Vigil</div>
+    <nav>
+      <button data-page="live" class="active">实时</button>
+      <button data-page="events">事件</button>
+      <button data-page="recordings">录像</button>
+    </nav>
+    <div id="health" class="health">…</div>
+  </header>
+
+  <main>
+    <section id="page-live" class="page active">
+      <h1>实时预览</h1>
+      <p class="hint">按检测帧率刷新 JPEG 快照（非连续视频流）。需配置可达的 RTSP，见 config/default.yaml</p>
+      <div id="live-grid" class="grid"></div>
+    </section>
+
+    <section id="page-events" class="page">
+      <h1>事件</h1>
+      <div id="events-list" class="list"></div>
+    </section>
+
+    <section id="page-recordings" class="page">
+      <h1>录像分段</h1>
+      <div id="rec-list" class="list"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

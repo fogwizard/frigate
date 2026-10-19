@@ -1,0 +1,432 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub mqtt: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub detect: DetectConfig,
+    #[serde(default)]
+    pub openvino: OpenvinoConfig,
+    #[serde(default)]
+    pub cameras: HashMap<String, CameraConfig>,
+    #[serde(default)]
+    pub record: RecordConfig,
+    #[serde(default)]
+    pub events: EventsConfig,
+    #[serde(default)]
+    pub web: WebConfig,
+    #[serde(default)]
+    pub paths: PathsConfig,
+    #[serde(default)]
+    pub webhook: Option<WebhookConfig>,
+    #[serde(default)]
+    pub ffmpeg: FfmpegConfig,
+    #[serde(default)]
+    pub infer: InferConfig,
+    /// HTTP-FLV playback for WeChat mini-program (MediaMTX + signed URLs).
+    #[serde(default)]
+    pub stream: StreamConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectConfig {
+    #[serde(default = "default_detect_fps")]
+    pub fps: f32,
+    /// Detection pipe resolution (raw RGB24 from FFmpeg).
+    #[serde(default = "default_detect_width")]
+    pub width: u32,
+    #[serde(default = "default_detect_height")]
+    pub height: u32,
+    #[serde(default = "default_labels")]
+    pub labels: Vec<String>,
+    #[serde(default = "default_score_threshold")]
+    pub score_threshold: f32,
+}
+
+fn default_detect_fps() -> f32 {
+    5.0
+}
+fn default_detect_width() -> u32 {
+    640
+}
+fn default_detect_height() -> u32 {
+    360
+}
+fn default_labels() -> Vec<String> {
+    vec![
+        "person".into(),
+        "cat".into(),
+        "dog".into(),
+    ]
+}
+fn default_score_threshold() -> f32 {
+    0.5
+}
+
+impl Default for DetectConfig {
+    fn default() -> Self {
+        Self {
+            fps: default_detect_fps(),
+            width: default_detect_width(),
+            height: default_detect_height(),
+            labels: default_labels(),
+            score_threshold: default_score_threshold(),
+        }
+    }
+}
+
+impl DetectConfig {
+    pub fn frame_bytes(&self) -> usize {
+        self.width as usize * self.height as usize * 3
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenvinoConfig {
+    #[serde(default = "default_device")]
+    pub device: String,
+    #[serde(default = "default_model")]
+    pub model: String,
+}
+
+fn default_device() -> String {
+    "GPU".into()
+}
+fn default_model() -> String {
+    "models/yolo11n.onnx".into()
+}
+
+impl Default for OpenvinoConfig {
+    fn default() -> Self {
+        Self {
+            device: default_device(),
+            model: default_model(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraConfig {
+    pub ffmpeg: CameraFfmpeg,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraFfmpeg {
+    pub inputs: Vec<CameraInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraInput {
+    pub path: String,
+    #[serde(default)]
+    pub roles: Vec<String>,
+}
+
+impl CameraConfig {
+    pub fn input_for_role(&self, role: &str) -> Option<&CameraInput> {
+        self.ffmpeg
+            .inputs
+            .iter()
+            .find(|i| i.roles.iter().any(|r| r == role))
+            .or_else(|| self.ffmpeg.inputs.first())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_retain_days")]
+    pub retain_days: u32,
+    #[serde(default = "default_segment_secs")]
+    pub segment_secs: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_retain_days() -> u32 {
+    7
+}
+fn default_segment_secs() -> u32 {
+    60
+}
+
+impl Default for RecordConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            retain_days: default_retain_days(),
+            segment_secs: default_segment_secs(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventsConfig {
+    #[serde(default = "default_events_retain")]
+    pub retain_days: u32,
+    #[serde(default = "default_pre_capture")]
+    pub pre_capture_secs: u32,
+    #[serde(default = "default_post_capture")]
+    pub post_capture_secs: u32,
+}
+
+fn default_events_retain() -> u32 {
+    14
+}
+fn default_pre_capture() -> u32 {
+    5
+}
+fn default_post_capture() -> u32 {
+    5
+}
+
+impl Default for EventsConfig {
+    fn default() -> Self {
+        Self {
+            retain_days: default_events_retain(),
+            pre_capture_secs: default_pre_capture(),
+            post_capture_secs: default_post_capture(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebConfig {
+    #[serde(default = "default_bind")]
+    pub bind: String,
+}
+
+fn default_bind() -> String {
+    "0.0.0.0:8970".into()
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            bind: default_bind(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathsConfig {
+    #[serde(default = "default_data_dir")]
+    pub data_dir: PathBuf,
+    #[serde(default = "default_db_path")]
+    pub db_path: PathBuf,
+}
+
+fn default_data_dir() -> PathBuf {
+    PathBuf::from("data")
+}
+fn default_db_path() -> PathBuf {
+    PathBuf::from("data/vigil.db")
+}
+
+impl Default for PathsConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: default_data_dir(),
+            db_path: default_db_path(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FfmpegConfig {
+    #[serde(default = "default_ffmpeg")]
+    pub binary: String,
+}
+
+fn default_ffmpeg() -> String {
+    "ffmpeg".into()
+}
+
+impl Default for FfmpegConfig {
+    fn default() -> Self {
+        Self {
+            binary: default_ffmpeg(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferConfig {
+    /// Unix socket path (Linux) or TCP host:port (e.g. 127.0.0.1:9870)
+    #[serde(default = "default_infer_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_infer_bin")]
+    pub binary: String,
+    #[serde(default = "default_queue_size")]
+    pub queue_size: usize,
+    /// Shared frame ring (mmap file). Created by vigil, opened by vigil-infer.
+    #[serde(default = "default_shm_path")]
+    pub shm_path: String,
+    #[serde(default = "default_shm_slots")]
+    pub shm_slots: u32,
+    /// Max bytes per frame slot (RGB24).
+    #[serde(default = "default_shm_slot_bytes")]
+    pub shm_slot_bytes: u32,
+}
+
+fn default_infer_endpoint() -> String {
+    if cfg!(windows) {
+        "127.0.0.1:9870".into()
+    } else {
+        "/run/vigil/infer.sock".into()
+    }
+}
+fn default_infer_bin() -> String {
+    "vigil-infer".into()
+}
+fn default_queue_size() -> usize {
+    // Pending (slot, seq) notifies; keep below shm_slots headroom.
+    32
+}
+fn default_shm_path() -> String {
+    "data/frames.shm".into()
+}
+fn default_shm_slots() -> u32 {
+    // Multi-camera frame ring: enough slots that ingest can publish ahead of
+    // detect/infer without immediately overwriting in-flight frames.
+    64
+}
+fn default_shm_slot_bytes() -> u32 {
+    // Fits 1280x720 RGB24; raise if detect.width/height larger.
+    2_764_800
+}
+
+impl Default for InferConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_infer_endpoint(),
+            binary: default_infer_bin(),
+            queue_size: default_queue_size(),
+            shm_path: default_shm_path(),
+            shm_slots: default_shm_slots(),
+            shm_slot_bytes: default_shm_slot_bytes(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// When true, combined FFmpeg also publishes a copy bitstream to MediaMTX
+    /// (camera is only opened once by Vigil; MTX does not pull the camera).
+    #[serde(default = "default_true")]
+    pub restream: bool,
+    /// FFmpeg publish URL template, e.g. `rtsp://127.0.0.1:8554/{camera}`.
+    #[serde(default = "default_stream_publish_url")]
+    pub publish_url_template: String,
+    /// Public HTTPS FLV origin (Nginx → MediaMTX), no trailing slash.
+    #[serde(default = "default_stream_public_base")]
+    pub public_base: String,
+    /// Path template; `{camera}` replaced with camera name (e.g. `/{camera}` → `/cam1`).
+    #[serde(default = "default_stream_path_template")]
+    pub path_template: String,
+    #[serde(default = "default_stream_sign_secret")]
+    pub sign_secret: String,
+    #[serde(default = "default_stream_sign_ttl")]
+    pub sign_ttl_secs: u64,
+    /// Shared secret for `X-Vigil-Token` on stream APIs (empty = no token check).
+    #[serde(default)]
+    pub api_token: String,
+}
+
+fn default_stream_public_base() -> String {
+    "https://stream.example.com".into()
+}
+fn default_stream_path_template() -> String {
+    "/{camera}".into()
+}
+fn default_stream_sign_secret() -> String {
+    "change-me".into()
+}
+fn default_stream_sign_ttl() -> u64 {
+    120
+}
+fn default_stream_publish_url() -> String {
+    "rtsp://127.0.0.1:8554/{camera}".into()
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            restream: true,
+            publish_url_template: default_stream_publish_url(),
+            public_base: default_stream_public_base(),
+            path_template: default_stream_path_template(),
+            sign_secret: default_stream_sign_secret(),
+            sign_ttl_secs: default_stream_sign_ttl(),
+            api_token: String::new(),
+        }
+    }
+}
+
+impl StreamConfig {
+    pub fn flv_path(&self, camera: &str) -> String {
+        self.path_template.replace("{camera}", camera)
+    }
+
+    /// Absolute FLV URL without query string, e.g. `https://host/cam1.flv`.
+    pub fn flv_url(&self, camera: &str) -> String {
+        let base = self.public_base.trim_end_matches('/');
+        let path = self.flv_path(camera);
+        let path = if path.ends_with(".flv") {
+            path
+        } else {
+            format!("{path}.flv")
+        };
+        if path.starts_with('/') {
+            format!("{base}{path}")
+        } else {
+            format!("{base}/{path}")
+        }
+    }
+
+    /// Local MediaMTX publisher URL for this camera.
+    pub fn publish_url(&self, camera: &str) -> String {
+        self.publish_url_template.replace("{camera}", camera)
+    }
+}
+
+impl Config {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading config {}", path.display()))?;
+        let cfg: Config = serde_yaml::from_str(&text)
+            .with_context(|| format!("parsing config {}", path.display()))?;
+        Ok(cfg)
+    }
+
+    pub fn recordings_dir(&self) -> PathBuf {
+        self.paths.data_dir.join("recordings")
+    }
+
+    pub fn clips_dir(&self) -> PathBuf {
+        self.paths.data_dir.join("clips")
+    }
+
+    pub fn snapshots_dir(&self) -> PathBuf {
+        self.paths.data_dir.join("snapshots")
+    }
+
+    pub fn live_snapshots_dir(&self) -> PathBuf {
+        self.paths.data_dir.join("live")
+    }
+}

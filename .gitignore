@@ -1,0 +1,12 @@
+/target/
+/data/
+/dist/
+**/*.db
+**/*.db-*
+models/*.xml
+models/*.bin
+models/*.onnx
+models/*.pt
+.DS_Store
+*.swp
+.env

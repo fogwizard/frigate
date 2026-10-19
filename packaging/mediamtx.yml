@@ -1,0 +1,33 @@
+# MediaMTX — accept Vigil FFmpeg restream (publisher), serve HTTP for Nginx/WeChat
+# Docs: https://github.com/bluenviron/mediamtx
+#
+# Flow: Camera --RTSP--> Vigil FFmpeg (-c copy) --RTSP publish--> MediaMTX --HTTP--> Nginx --> live-player
+# MediaMTX does NOT pull cameras (avoids second RTSP client on the lens).
+#
+# 1) Start MediaMTX first: mediamtx packaging/mediamtx.yml
+# 2) Start Vigil with stream.restream: true (default)
+# 3) Nginx: packaging/nginx-flv.conf.example
+
+logLevel: info
+
+# Vigil publishes here (must match stream.publish_url_template in config)
+rtsp: yes
+rtspAddress: :8554
+rtmp: no
+webrtc: no
+
+# Playback for Nginx proxy (path names = camera ids)
+hls: yes
+hlsAddress: :8888
+
+paths:
+  cam1:
+    source: publisher
+  cam2:
+    source: publisher
+  cam3:
+    source: publisher
+  cam4:
+    source: publisher
+  cam5:
+    source: publisher

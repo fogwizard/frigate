@@ -1,0 +1,22 @@
+[Unit]
+Description=Vigil NVR (slim Frigate alternative)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@DATA@
+Environment=LD_LIBRARY_PATH=@PREFIX@/lib
+Environment=PATH=@PREFIX@/bin:/usr/bin
+ExecStart=@PREFIX@/bin/vigil --config @CONFIG@ --web-dir @PREFIX@/share/web
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+# Allow access to iGPU render node when present
+SupplementaryGroups=render video
+
+[Install]
+WantedBy=multi-user.target

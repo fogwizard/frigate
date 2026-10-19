@@ -1,0 +1,18 @@
+<view class="hint">{{camera}} · 签名 URL 约 2 分钟过期，失败可点刷新</view>
+
+<view wx:if="{{error}}" class="err">{{error}}</view>
+
+<live-player
+  wx:if="{{flvUrl}}"
+  id="player"
+  class="player"
+  src="{{flvUrl}}"
+  mode="live"
+  autoplay
+  muted
+  object-fit="contain"
+  bindstatechange="onState"
+  binderror="onPlayerError"
+/>
+
+<button class="btn" bindtap="refresh" loading="{{loading}}">刷新拉流地址</button>

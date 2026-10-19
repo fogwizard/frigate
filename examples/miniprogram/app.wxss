@@ -1,0 +1,23 @@
+page {
+  background: #111;
+  color: #eee;
+  font-size: 28rpx;
+  min-height: 100vh;
+}
+
+.btn {
+  margin: 24rpx;
+  background: #2a6df4;
+  color: #fff;
+}
+
+.err {
+  color: #f66;
+  padding: 24rpx;
+}
+
+.hint {
+  color: #888;
+  padding: 16rpx 24rpx;
+  font-size: 24rpx;
+}
