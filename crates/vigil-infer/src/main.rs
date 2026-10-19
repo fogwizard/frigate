@@ -149,10 +149,10 @@ where
         let req: InferRequest = ipc::recv_json(&mut stream).await?;
         let resp = match app.ring.take(req.slot, req.seq) {
             Ok(frame) => {
-                let fmt = match frame.format {
-                    vigil_common::shm::FORMAT_RGB8 => "rgb8",
-                    vigil_common::shm::FORMAT_JPEG => "jpeg",
-                    _ => "rgb8",
+                let fmt = if frame.format == vigil_common::shm::FORMAT_JPEG {
+                    "jpeg"
+                } else {
+                    "rgb8"
                 };
                 match app.engine.infer_frame(
                     fmt,

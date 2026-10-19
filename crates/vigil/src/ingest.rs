@@ -8,13 +8,18 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 use vigil_common::shm::{FrameRing, FORMAT_RGB8};
-use vigil_common::Config;
+use vigil_common::{Config, UsbConfig};
+
+enum SourceKind {
+    Rtsp,
+    Usb,
+}
 
 pub async fn run_all_cameras(
     cfg: Arc<Config>,
@@ -22,39 +27,58 @@ pub async fn run_all_cameras(
     ring: Arc<FrameRing>,
     detect_tx: mpsc::Sender<DetectJob>,
 ) {
+    if cfg.usb.enabled && cfg.usb.device.trim().is_empty() {
+        warn!("usb.enabled but device is empty — USB mode skipped");
+    }
+
     for (name, cam) in &cfg.cameras {
         if !cfg.record.enabled {
             warn!(camera = %name, "record disabled; combined mode skipped");
             continue;
         }
 
-        let record = cam.input_for_role("record");
-        let detect = cam.input_for_role("detect");
-        let rtsp = match (record, detect) {
-            (Some(r), Some(d)) if r.path == d.path => r.path.clone(),
-            (Some(_), Some(_)) => {
-                warn!(
-                    camera = %name,
-                    "record/detect RTSP differ; only combined (same URL) is supported, skip"
-                );
-                continue;
-            }
-            _ => {
-                warn!(
-                    camera = %name,
-                    "combined mode needs both record and detect roles on one input, skip"
-                );
-                continue;
+        let use_usb = cfg.usb.is_active_for(name);
+        if cfg.usb.enabled && cfg.usb.only && !use_usb {
+            debug!(camera = %name, "skipped (usb.only)");
+            continue;
+        }
+
+        let source = if use_usb {
+            cfg.usb.device.clone()
+        } else {
+            let record = cam.input_for_role("record");
+            let detect = cam.input_for_role("detect");
+            match (record, detect) {
+                (Some(r), Some(d)) if r.path == d.path => r.path.clone(),
+                (Some(_), Some(_)) => {
+                    warn!(
+                        camera = %name,
+                        "record/detect RTSP differ; only combined (same URL) is supported, skip"
+                    );
+                    continue;
+                }
+                _ => {
+                    warn!(
+                        camera = %name,
+                        "combined mode needs both record and detect roles on one input, skip"
+                    );
+                    continue;
+                }
             }
         };
 
+        let kind = if use_usb {
+            SourceKind::Usb
+        } else {
+            SourceKind::Rtsp
+        };
         let cfg = cfg.clone();
         let db = db.clone();
         let ring = ring.clone();
         let camera = name.clone();
         let tx = detect_tx.clone();
         tokio::spawn(async move {
-            run_combined(cfg, db, ring, camera, rtsp, tx).await;
+            run_combined(cfg, db, ring, camera, source, kind, tx).await;
         });
     }
 }
@@ -64,7 +88,8 @@ async fn run_combined(
     db: Arc<Db>,
     ring: Arc<FrameRing>,
     camera: String,
-    rtsp: String,
+    source: String,
+    kind: SourceKind,
     tx: mpsc::Sender<DetectJob>,
 ) {
     let mut backoff = 1u64;
@@ -72,13 +97,16 @@ async fn run_combined(
     let _ = std::fs::create_dir_all(&live_dir);
 
     loop {
-        match spawn_combined_ffmpeg(&cfg, &camera, &rtsp).await {
+        match spawn_combined_ffmpeg(&cfg, &camera, &source, &kind).await {
             Ok(mut child) => {
+                let do_restream = restream_enabled(&cfg, &kind);
                 info!(
                     camera = %camera,
-                    restream = cfg.stream.restream,
+                    source = %source,
+                    usb = matches!(kind, SourceKind::Usb),
+                    restream = do_restream,
                     "ffmpeg started (record+raw detect{})",
-                    if cfg.stream.restream { "+restream" } else { "" }
+                    if do_restream { "+restream" } else { "" }
                 );
                 backoff = 1;
                 let Some(stdout) = child.stdout.take() else {
@@ -86,6 +114,9 @@ async fn run_combined(
                     let _ = child.kill().await;
                     continue;
                 };
+                if let Some(stderr) = child.stderr.take() {
+                    spawn_ffmpeg_stderr_logger(camera.clone(), stderr);
+                }
 
                 let raw =
                     read_raw_loop(cfg.clone(), ring.clone(), camera.clone(), stdout, tx.clone());
@@ -105,7 +136,6 @@ async fn run_combined(
                         warn!(camera = %camera, ?status, "ffmpeg exited, reconnecting");
                     }
                     _ = tracker => {
-                        // Should not finish; if it does, never leave ffmpeg orphaned.
                         warn!(camera = %camera, "segment tracker ended unexpectedly");
                         let _ = child.kill().await;
                         let _ = child.wait().await;
@@ -122,6 +152,14 @@ async fn run_combined(
     }
 }
 
+fn restream_enabled(cfg: &Config, kind: &SourceKind) -> bool {
+    match kind {
+        // USB restream is opt-in: a missing go2rtc kills the whole process.
+        SourceKind::Usb => cfg.usb.restream,
+        SourceKind::Rtsp => cfg.stream.restream,
+    }
+}
+
 fn detect_vf(cfg: &Config) -> String {
     format!(
         "fps={},scale={}:{}:flags=fast_bilinear",
@@ -131,7 +169,57 @@ fn detect_vf(cfg: &Config) -> String {
     )
 }
 
-async fn spawn_combined_ffmpeg(cfg: &Config, camera: &str, rtsp: &str) -> Result<Child> {
+fn push_usb_input_args(args: &mut Vec<String>, usb: &UsbConfig) {
+    let backend = usb.resolved_backend();
+    if backend == "dshow" {
+        // Large buffer avoids dshow "real-time buffer too full" / I/O errors under load.
+        args.extend(["-rtbufsize".into(), "100M".into()]);
+    }
+    args.push("-f".into());
+    args.push(backend.into());
+    // nv12 is cheaper than yuyv422 on most Windows webcams.
+    if backend == "dshow" {
+        args.extend(["-pixel_format".into(), "nv12".into()]);
+    }
+    if usb.width > 0 && usb.height > 0 {
+        args.push("-video_size".into());
+        args.push(format!("{}x{}", usb.width, usb.height));
+    }
+    if usb.fps > 0.0 {
+        args.push("-framerate".into());
+        args.push(format!("{}", usb.fps));
+    }
+    args.push("-i".into());
+    match backend {
+        "dshow" => args.push(format!("video={}", usb.device.trim())),
+        _ => args.push(usb.device.trim().to_string()),
+    }
+}
+
+fn spawn_ffmpeg_stderr_logger(camera: String, stderr: impl tokio::io::AsyncRead + Unpin + Send + 'static) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let lower = line.to_ascii_lowercase();
+            if lower.contains("error")
+                || lower.contains("failed")
+                || lower.contains("could not")
+                || lower.contains("not found")
+            {
+                warn!(camera = %camera, %line, "ffmpeg");
+            } else {
+                debug!(camera = %camera, %line, "ffmpeg");
+            }
+        }
+    });
+}
+
+async fn spawn_combined_ffmpeg(
+    cfg: &Config,
+    camera: &str,
+    source: &str,
+    kind: &SourceKind,
+) -> Result<Child> {
     let out_dir = cfg.recordings_dir().join(camera);
     std::fs::create_dir_all(&out_dir)?;
     let today = Utc::now().format("%Y-%m-%d").to_string();
@@ -143,35 +231,63 @@ async fn spawn_combined_ffmpeg(cfg: &Config, camera: &str, rtsp: &str) -> Result
         .to_string();
     let segment = cfg.record.segment_secs.to_string();
     let vf = detect_vf(cfg);
+    let usb_mode = matches!(kind, SourceKind::Usb);
+    let do_restream = restream_enabled(cfg, kind);
 
-    // One FFmpeg: record + detect pipe [+ optional RTSP publish to go2rtc].
     let mut args: Vec<String> = vec![
         "-hide_banner".into(),
         "-loglevel".into(),
         "warning".into(),
         "-nostdin".into(),
-        "-rtsp_transport".into(),
-        "tcp".into(),
-        "-i".into(),
-        rtsp.to_string(),
-        // Output 0: recording (bitstream copy)
-        "-map".into(),
-        "0:v:0".into(),
-        "-an".into(),
-        "-c".into(),
-        "copy".into(),
+    ];
+
+    match kind {
+        SourceKind::Rtsp => {
+            args.extend([
+                "-rtsp_transport".into(),
+                "tcp".into(),
+                "-i".into(),
+                source.to_string(),
+            ]);
+        }
+        SourceKind::Usb => {
+            push_usb_input_args(&mut args, &cfg.usb);
+            info!(
+                camera = %camera,
+                device = %cfg.usb.device,
+                backend = cfg.usb.resolved_backend(),
+                "using USB webcam input"
+            );
+        }
+    }
+
+    // Output 0: recording — copy for RTSP; re-encode for USB.
+    args.extend(["-map".into(), "0:v:0".into(), "-an".into()]);
+    if usb_mode {
+        args.extend([
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "ultrafast".into(),
+            "-tune".into(),
+            "zerolatency".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+        ]);
+    } else {
+        args.extend(["-c".into(), "copy".into()]);
+    }
+    args.extend([
         "-f".into(),
         "segment".into(),
         "-segment_time".into(),
         segment,
-        "-segment_atclocktime".into(),
-        "1".into(),
         "-reset_timestamps".into(),
         "1".into(),
         "-strftime".into(),
         "1".into(),
         pattern,
-        // Output 1: raw RGB24 detection frames
+        // Output 1: raw RGB24 detection / live-preview frames
         "-map".into(),
         "0:v:0".into(),
         "-an".into(),
@@ -182,18 +298,28 @@ async fn spawn_combined_ffmpeg(cfg: &Config, camera: &str, rtsp: &str) -> Result
         "-f".into(),
         "rawvideo".into(),
         "pipe:1".into(),
-    ];
+    ]);
 
-    // Output 2: restream to go2rtc (publisher). Camera is not pulled again by go2rtc.
-    if cfg.stream.restream {
+    // Output 2: restream to go2rtc (optional).
+    if do_restream {
         let publish = cfg.stream.publish_url(camera);
         info!(camera = %camera, %publish, "ffmpeg restream to go2rtc");
+        args.extend(["-map".into(), "0:v:0".into(), "-an".into()]);
+        if usb_mode {
+            args.extend([
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                "ultrafast".into(),
+                "-tune".into(),
+                "zerolatency".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+            ]);
+        } else {
+            args.extend(["-c".into(), "copy".into()]);
+        }
         args.extend([
-            "-map".into(),
-            "0:v:0".into(),
-            "-an".into(),
-            "-c".into(),
-            "copy".into(),
             "-f".into(),
             "rtsp".into(),
             "-rtsp_transport".into(),
@@ -205,8 +331,7 @@ async fn spawn_combined_ffmpeg(cfg: &Config, camera: &str, rtsp: &str) -> Result
     let mut cmd = Command::new(&cfg.ffmpeg.binary);
     cmd.args(&args)
         .stdout(Stdio::piped())
-        // Never leave stderr piped unread — full pipe can stall ffmpeg forever.
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
 
     proc_guard::apply_spawn_hooks(&mut cmd);
@@ -228,13 +353,7 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
     let frame_len = cfg.detect.frame_bytes();
     let mut reader = BufReader::with_capacity(frame_len * 2, reader);
 
-    // UI preview: write JPEG at most ~2 Hz to avoid encode cost on every frame
-    let mut last_preview = std::time::Instant::now()
-        .checked_sub(Duration::from_secs(1))
-        .unwrap_or_else(std::time::Instant::now);
-
     loop {
-        // Read FFmpeg rawvideo straight into a claimed shm slot (no staging Vec).
         let mut slot_w = match ring.begin_write(&camera, width, height, FORMAT_RGB8, frame_len) {
             Ok(w) => w,
             Err(e) => {
@@ -244,16 +363,13 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
         };
 
         if let Err(e) = reader.read_exact(slot_w.payload_mut()).await {
-            // Drop aborts WRITING slot.
             return Err(e.into());
         }
 
-        if last_preview.elapsed() >= Duration::from_millis(500) {
-            if let Some(jpeg) = rgb_to_jpeg(slot_w.payload(), width, height) {
-                let live_path = live_dir.join(format!("{camera}.jpg"));
-                let _ = std::fs::write(&live_path, jpeg);
-            }
-            last_preview = std::time::Instant::now();
+        // Live preview: encode every detect frame (500ms throttle made the UI stutter).
+        if let Some(jpeg) = rgb_to_jpeg(slot_w.payload(), width, height, 70) {
+            let live_path = live_dir.join(format!("{camera}.jpg"));
+            let _ = std::fs::write(&live_path, jpeg);
         }
 
         let (slot, seq) = match slot_w.commit() {
@@ -268,8 +384,6 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
             camera: camera.clone(),
             slot,
             seq,
-            width,
-            height,
         };
         if tx.try_send(job).is_err() {
             debug!(camera = %camera, slot, seq, "detect queue full, dropping notify");
@@ -277,11 +391,85 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
     }
 }
 
-fn rgb_to_jpeg(rgb: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+/// Encode RGB8 → JPEG. Shared by live preview and event snapshots.
+pub(crate) fn rgb_to_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8) -> Option<Vec<u8>> {
     use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder};
     let mut out = Vec::new();
-    let mut enc = JpegEncoder::new_with_quality(&mut out, 70);
+    let enc = JpegEncoder::new_with_quality(&mut out, quality);
     enc.write_image(rgb, width, height, ExtendedColorType::Rgb8)
         .ok()?;
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vigil_common::UsbConfig;
+
+    #[test]
+    fn usb_backend_auto_windows_style_name() {
+        let u = UsbConfig {
+            device: "Integrated Camera".into(),
+            backend: String::new(),
+            ..Default::default()
+        };
+        #[cfg(windows)]
+        assert_eq!(u.resolved_backend(), "dshow");
+        #[cfg(not(windows))]
+        assert_eq!(u.resolved_backend(), "v4l2");
+    }
+
+    #[test]
+    fn usb_backend_dev_path() {
+        let u = UsbConfig {
+            device: "/dev/video0".into(),
+            backend: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(u.resolved_backend(), "v4l2");
+    }
+
+    #[test]
+    fn usb_input_args_dshow() {
+        let u = UsbConfig {
+            enabled: true,
+            device: "HD Webcam".into(),
+            width: 640,
+            height: 480,
+            fps: 30.0,
+            backend: "dshow".into(),
+            ..Default::default()
+        };
+        let mut args = Vec::new();
+        push_usb_input_args(&mut args, &u);
+        assert_eq!(
+            args,
+            vec![
+                "-rtbufsize",
+                "100M",
+                "-f",
+                "dshow",
+                "-pixel_format",
+                "nv12",
+                "-video_size",
+                "640x480",
+                "-framerate",
+                "30",
+                "-i",
+                "video=HD Webcam",
+            ]
+        );
+    }
+
+    #[test]
+    fn usb_active_for_named_camera() {
+        let u = UsbConfig {
+            enabled: true,
+            device: "cam".into(),
+            camera: "cam1".into(),
+            ..Default::default()
+        };
+        assert!(u.is_active_for("cam1"));
+        assert!(!u.is_active_for("cam2"));
+    }
 }

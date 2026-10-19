@@ -33,6 +33,22 @@ infer:
   shm_slots: 64
   shm_slot_bytes: 2764800
 
+# USB 摄像头测试：enabled: true 后，指定 camera 用本机摄像头代替 RTSP。
+# Windows 列设备: ffmpeg -list_devices true -f dshow -i dummy
+# Linux 列设备:   ls /dev/video*  或  v4l2-ctl --list-devices
+usb:
+  enabled: true
+  device: "HP 5MP Camera"
+  camera: cam1
+  width: 640
+  height: 480
+  fps: 15
+  backend: dshow
+  # go2rtc 未启动时务必保持 false，否则整路 FFmpeg 会退出、无画面
+  restream: false
+  # true = 只开 USB 这一路，跳过其它占位 RTSP
+  only: true
+
 # 下面是占位地址（本机 8554 没有流时页面会黑屏/无信号）。
 # 请改成真实摄像头 RTSP，例如：
 #   rtsp://user:pass@192.168.1.10:554/Streaming/Channels/101
@@ -84,7 +100,8 @@ web:
 # See packaging/go2rtc.yaml and packaging/nginx-flv.conf.example
 stream:
   enabled: true
-  restream: true
+  # 需要先启动 go2rtc（:8554）再设 true；否则 FFmpeg 会因推流失败退出
+  restream: false
   # Must match go2rtc rtsp.listen + stream name (publisher)
   publish_url_template: "rtsp://127.0.0.1:8554/{camera}"
   # Nginx maps /{camera}.flv → go2rtc /api/stream.flv?src={camera}
@@ -92,7 +109,6 @@ stream:
   path_template: "/{camera}"
   sign_secret: "change-me"
   sign_ttl_secs: 120
-  api_token: ""
 
 # Mini-program login / boarding / door / feed / water (see examples/miniprogram)
 miniprogram:

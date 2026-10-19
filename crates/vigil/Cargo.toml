@@ -23,7 +23,6 @@ tower-http = { workspace = true }
 rusqlite = { workspace = true }
 reqwest = { workspace = true }
 clap = { workspace = true }
-bytes = { workspace = true }
 image = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }

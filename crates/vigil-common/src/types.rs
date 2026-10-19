@@ -2,27 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct CameraId(pub String);
-
-impl CameraId {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&str> for CameraId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl std::fmt::Display for CameraId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Detection {
     pub label: String,

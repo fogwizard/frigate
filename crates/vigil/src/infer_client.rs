@@ -234,22 +234,8 @@ impl InferClient {
     }
 
     /// Frame already published to shm; notify infer with slot+seq only.
-    pub async fn infer_slot(
-        &self,
-        camera_id: &str,
-        slot: u32,
-        seq: u64,
-        width: u32,
-        height: u32,
-    ) -> Result<InferResponse> {
-        let req = InferRequest {
-            slot,
-            seq,
-            camera_id: camera_id.to_string(),
-            width,
-            height,
-            format: "rgb8".into(),
-        };
+    pub async fn infer_slot(&self, slot: u32, seq: u64) -> Result<InferResponse> {
+        let req = InferRequest { slot, seq };
 
         let mut guard = self.stream.lock().await;
         if guard.is_none() {

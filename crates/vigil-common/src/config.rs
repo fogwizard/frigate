@@ -33,6 +33,9 @@ pub struct Config {
     /// WeChat mini-program login / boarding / device APIs.
     #[serde(default)]
     pub miniprogram: MiniprogramConfig,
+    /// Local USB webcam for testing (replaces RTSP for one camera).
+    #[serde(default)]
+    pub usb: UsbConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +249,85 @@ pub struct WebhookConfig {
     pub url: String,
 }
 
+/// Use a local USB webcam instead of RTSP (dev / demo).
+///
+/// Windows: DirectShow (`ffmpeg -list_devices true -f dshow -i dummy`).
+/// Linux: V4L2 (`/dev/video0`, or `v4l2-ctl --list-devices`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsbConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Camera name (Windows) or device path (Linux, e.g. `/dev/video0`).
+    #[serde(default)]
+    pub device: String,
+    /// Which configured camera id receives the USB feed.
+    #[serde(default = "default_usb_camera")]
+    pub camera: String,
+    /// Capture size (0 = let driver choose).
+    #[serde(default = "default_usb_width")]
+    pub width: u32,
+    #[serde(default = "default_usb_height")]
+    pub height: u32,
+    #[serde(default = "default_usb_fps")]
+    pub fps: f32,
+    /// Force backend: `dshow` | `v4l2` | empty = auto by OS / device path.
+    #[serde(default)]
+    pub backend: String,
+    /// Publish USB cam to go2rtc (needs :8554 up). Default off — a dead restream
+    /// target kills the whole FFmpeg (no detect / live snapshot either).
+    #[serde(default)]
+    pub restream: bool,
+    /// When true, only start the USB-bound camera (skip other RTSP placeholders).
+    #[serde(default = "default_true")]
+    pub only: bool,
+}
+
+fn default_usb_camera() -> String {
+    "cam1".into()
+}
+fn default_usb_width() -> u32 {
+    640
+}
+fn default_usb_height() -> u32 {
+    480
+}
+fn default_usb_fps() -> f32 {
+    15.0
+}
+
+impl Default for UsbConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            device: String::new(),
+            camera: default_usb_camera(),
+            width: default_usb_width(),
+            height: default_usb_height(),
+            fps: default_usb_fps(),
+            backend: String::new(),
+            restream: false,
+            only: true,
+        }
+    }
+}
+
+impl UsbConfig {
+    pub fn is_active_for(&self, camera: &str) -> bool {
+        self.enabled && !self.device.trim().is_empty() && self.camera == camera
+    }
+
+    /// Resolved capture backend: `dshow` or `v4l2`.
+    pub fn resolved_backend(&self) -> &'static str {
+        match self.backend.trim().to_ascii_lowercase().as_str() {
+            "dshow" | "directshow" => "dshow",
+            "v4l2" | "v4l" => "v4l2",
+            _ if self.device.starts_with("/dev/") => "v4l2",
+            _ if cfg!(windows) => "dshow",
+            _ => "v4l2",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FfmpegConfig {
     #[serde(default = "default_ffmpeg")]
@@ -344,9 +426,6 @@ pub struct StreamConfig {
     pub sign_secret: String,
     #[serde(default = "default_stream_sign_ttl")]
     pub sign_ttl_secs: u64,
-    /// Shared secret for `X-Vigil-Token` on stream APIs (empty = no token check).
-    #[serde(default)]
-    pub api_token: String,
 }
 
 fn default_stream_public_base() -> String {
@@ -375,7 +454,6 @@ impl Default for StreamConfig {
             path_template: default_stream_path_template(),
             sign_secret: default_stream_sign_secret(),
             sign_ttl_secs: default_stream_sign_ttl(),
-            api_token: String::new(),
         }
     }
 }

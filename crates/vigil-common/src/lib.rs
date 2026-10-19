@@ -6,5 +6,6 @@ pub mod types;
 
 pub use config::{
     CameraConfig, CameraFfmpeg, CameraInput, Config, MiniprogramConfig, PathsConfig, StreamConfig,
+    UsbConfig,
 };
 pub use types::*;

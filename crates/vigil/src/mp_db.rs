@@ -36,15 +36,11 @@ pub struct CageRow {
 pub struct OrderRow {
     pub id: String,
     pub openid: String,
-    pub cage_id: String,
     pub camera: String,
-    pub number: String,
-    pub label: String,
     pub amount: i64,
     pub status: String,
     pub payment_status: String,
     pub record_id: Option<String>,
-    pub request_id: String,
 }
 
 impl Db {
@@ -292,22 +288,18 @@ impl Db {
     fn load_order_where(&self, where_sql: &str, params: impl rusqlite::Params) -> Result<Option<OrderRow>> {
         let conn = self.lock()?;
         let sql = format!(
-            "SELECT id, openid, cage_id, camera, number, label, amount_cents, status, payment_status, record_id, request_id
+            "SELECT id, openid, camera, amount_cents, status, payment_status, record_id
              FROM boarding_orders WHERE {where_sql}"
         );
         conn.query_row(&sql, params, |r| {
             Ok(OrderRow {
                 id: r.get(0)?,
                 openid: r.get(1)?,
-                cage_id: r.get(2)?,
-                camera: r.get(3)?,
-                number: r.get(4)?,
-                label: r.get(5)?,
-                amount: r.get(6)?,
-                status: r.get(7)?,
-                payment_status: r.get(8)?,
-                record_id: r.get(9)?,
-                request_id: r.get(10)?,
+                camera: r.get(2)?,
+                amount: r.get(3)?,
+                status: r.get(4)?,
+                payment_status: r.get(5)?,
+                record_id: r.get(6)?,
             })
         })
         .optional()

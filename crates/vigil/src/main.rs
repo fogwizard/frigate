@@ -17,7 +17,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{info, warn, Level};
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use vigil_common::Config;
 
@@ -83,7 +83,6 @@ async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
-        .with_max_level(Level::DEBUG)
         .init();
 
     proc_guard::init();

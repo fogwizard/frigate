@@ -145,7 +145,7 @@ async function loadRecordings() {
 loadLive();
 refreshHealth();
 setInterval(refreshHealth, 5000);
-setInterval(refreshSnapshots, 2000);
+setInterval(refreshSnapshots, 200);
 setInterval(() => {
   if ($("#page-live").classList.contains("active") && !$("#live-grid .card")) loadLive();
 }, 10000);

@@ -34,8 +34,6 @@ pub fn verify(secret: &str, camera: &str, exp_unix: i64, sig: &str) -> bool {
 pub struct SignedPlay {
     pub url: String,
     pub expires_at: DateTime<Utc>,
-    pub exp_unix: i64,
-    pub sig: String,
 }
 
 pub fn issue_play_url(cfg: &StreamConfig, camera: &str, now: DateTime<Utc>) -> SignedPlay {
@@ -43,14 +41,8 @@ pub fn issue_play_url(cfg: &StreamConfig, camera: &str, now: DateTime<Utc>) -> S
     let sig = sign(&cfg.sign_secret, camera, exp_unix);
     let base = cfg.flv_url(camera);
     let url = format!("{base}?exp={exp_unix}&sig={sig}");
-    let expires_at =
-        DateTime::from_timestamp(exp_unix, 0).unwrap_or(now);
-    SignedPlay {
-        url,
-        expires_at,
-        exp_unix,
-        sig,
-    }
+    let expires_at = DateTime::from_timestamp(exp_unix, 0).unwrap_or(now);
+    SignedPlay { url, expires_at }
 }
 
 pub fn check_auth(

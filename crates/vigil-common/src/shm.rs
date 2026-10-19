@@ -242,7 +242,7 @@ impl FrameRing {
     }
 
     fn finish_write(&self, slot: u32, base: usize, ready: bool) -> Result<()> {
-        let mut mmap = self.mmap.lock().map_err(|_| anyhow::anyhow!("shm lock"))?;
+        let mmap = self.mmap.lock().map_err(|_| anyhow::anyhow!("shm lock"))?;
         let state = unsafe { &*(mmap.as_ptr().add(base + SM_STATE) as *const AtomicU32) };
         if ready {
             state.store(ST_READY, Ordering::Release);

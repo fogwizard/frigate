@@ -118,7 +118,6 @@ pub async fn streams_list(
     if session.role != "admin" {
         return Err(AppError::forbidden("admin only"));
     }
-    require_stream_enabled_soft(&st)?;
     let mut cams: Vec<_> = st.cfg.cameras.keys().cloned().collect();
     cams.sort();
     let cameras: Vec<Value> = cams
@@ -166,12 +165,6 @@ pub async fn streams_play(
         "url": play.url,
         "expires_at": play.expires_at,
     })))
-}
-
-fn require_stream_enabled_soft(st: &AppState) -> Result<(), AppError> {
-    // Admin may list cameras even if public FLV is off; play still checks stream.enabled.
-    let _ = st;
-    Ok(())
 }
 
 pub async fn boarding_records(

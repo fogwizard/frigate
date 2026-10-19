@@ -11,16 +11,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const MAX_FRAME: usize = 256 * 1024;
 
-/// Notify infer to read a frame from shared memory.
+/// Notify infer to read a frame from shared memory (pixels + meta live in shm).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferRequest {
     pub slot: u32,
     pub seq: u64,
-    pub camera_id: String,
-    pub width: u32,
-    pub height: u32,
-    /// "rgb8" (preferred) or "jpeg"
-    pub format: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

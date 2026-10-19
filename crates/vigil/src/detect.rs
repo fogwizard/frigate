@@ -2,7 +2,6 @@ use crate::events::EventEngine;
 use crate::infer_client::InferClient;
 use crate::ingest;
 use chrono::Utc;
-use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::warn;
@@ -32,8 +31,6 @@ pub struct DetectJob {
     pub camera: String,
     pub slot: u32,
     pub seq: u64,
-    pub width: u32,
-    pub height: u32,
 }
 
 pub async fn run_detect_pipeline(
@@ -65,10 +62,7 @@ async fn detect_worker(
     mut rx: mpsc::Receiver<DetectJob>,
 ) {
     while let Some(job) = rx.recv().await {
-        match infer
-            .infer_slot(&job.camera, job.slot, job.seq, job.width, job.height)
-            .await
-        {
+        match infer.infer_slot(job.slot, job.seq).await {
             Ok(resp) => {
                 if let Some(err) = &resp.error {
                     warn!(error = %err, "infer error");
@@ -109,19 +103,5 @@ fn frame_to_jpeg_snapshot(ring: &FrameRing, job: &DetectJob) -> Vec<u8> {
     if frame.format != FORMAT_RGB8 {
         return Vec::new();
     }
-    let mut out = Vec::new();
-    let mut enc = JpegEncoder::new_with_quality(&mut out, 80);
-    if enc
-        .write_image(
-            &frame.data,
-            frame.width,
-            frame.height,
-            ExtendedColorType::Rgb8,
-        )
-        .is_ok()
-    {
-        out
-    } else {
-        Vec::new()
-    }
+    ingest::rgb_to_jpeg(&frame.data, frame.width, frame.height, 80).unwrap_or_default()
 }

@@ -57,26 +57,24 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
         .with_state(state)
 }
 
-async fn health(State(st): State<Arc<AppState>>) -> Json<HealthStatus> {
-    Json(HealthStatus {
+async fn health_status(st: &AppState) -> HealthStatus {
+    HealthStatus {
         ok: true,
         version: st.version.clone(),
         cameras: st.cfg.cameras.len(),
         infer_connected: *st.infer_connected.read().await,
         uptime_secs: st.started.elapsed().as_secs(),
-    })
+    }
+}
+
+async fn health(State(st): State<Arc<AppState>>) -> Json<HealthStatus> {
+    Json(health_status(&st).await)
 }
 
 async fn status(State(st): State<Arc<AppState>>) -> Json<StatusResponse> {
     let cameras: Vec<_> = st.statuses.read().await.values().cloned().collect();
     Json(StatusResponse {
-        health: HealthStatus {
-            ok: true,
-            version: st.version.clone(),
-            cameras: st.cfg.cameras.len(),
-            infer_connected: *st.infer_connected.read().await,
-            uptime_secs: st.started.elapsed().as_secs(),
-        },
+        health: health_status(&st).await,
         cameras,
     })
 }
