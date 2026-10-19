@@ -1,10 +1,20 @@
 <view class="live-page">
   <view class="identity">
     <view class="identity-copy">
-      <text class="eyebrow">微信 ID</text>
-      <text class="identity-value" selectable>{{wechatId || '未设置'}}</text>
+      <text class="eyebrow">微信身份 · OpenID</text>
+      <text class="identity-value" selectable>{{openid || (camerasLoading ? '正在登录' : '未登录')}}</text>
     </view>
-    <button class="text-button" bindtap="editWechatId">{{wechatId ? '修改' : '设置'}}</button>
+  </view>
+
+  <view class="camera-selection">
+    <button wx:if="{{!camerasLoading && !cameras.length}}" class="btn" bindtap="startBoarding">扫码寄养</button>
+    <text class="picker-label">寄养号码 / 镜头 · {{cameras.length}} 个</text>
+    <picker mode="selector" range="{{cameras}}" range-key="label" value="{{cameraIndex}}" bindchange="selectCamera" disabled="{{!cameras.length || camerasLoading || feeding || watering}}">
+      <view class="camera-picker">
+        <text class="picker-value">{{cameras.length ? cameras[cameraIndex].label : (camerasLoading ? '正在加载镜头' : '暂无已授权镜头')}}</text>
+        <text class="picker-arrow">⌄</text>
+      </view>
+    </picker>
   </view>
 
   <view class="video-section">
@@ -12,7 +22,7 @@
       <text class="device-name">{{camera || '实时画面'}}</text>
       <view class="stream-status {{playing ? 'is-online' : ''}}">
         <view class="status-dot"></view>
-        <text>{{playing ? '直播中' : (error ? '未连接' : '连接中')}}</text>
+        <text>{{playing ? '直播中' : (error || !camera ? '未连接' : '连接中')}}</text>
       </view>
     </view>
     <view class="video-frame">
@@ -34,7 +44,7 @@
     </view>
     <view class="video-footer">
       <text class="video-message {{error ? 'error-text' : ''}}">{{error || (playing ? '实时视频' : '等待视频画面')}}</text>
-      <button class="text-button" bindtap="refresh" loading="{{loading}}" disabled="{{loading}}">刷新画面</button>
+      <button class="text-button" bindtap="refresh" loading="{{loading || camerasLoading}}" disabled="{{loading || camerasLoading || feeding || watering}}">刷新画面</button>
     </view>
   </view>
 

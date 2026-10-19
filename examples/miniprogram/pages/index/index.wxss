@@ -42,3 +42,41 @@
   padding: 36rpx 32rpx 12rpx;
   font-weight: 600;
 }
+
+.door-section {
+  padding: 32rpx;
+  border-bottom: 1rpx solid #dce2e0;
+}
+
+.door-heading {
+  display: block;
+  margin-bottom: 20rpx;
+  font-weight: 600;
+}
+
+.door-button {
+  min-height: 96rpx;
+  line-height: 96rpx;
+  background: #167753;
+  color: #fff;
+  border-radius: 12rpx;
+  font-size: 30rpx;
+}
+
+.door-button::after {
+  border: none;
+}
+
+.door-button[disabled] {
+  background: #dce5e0;
+  color: #718179;
+}
+
+.door-status {
+  display: block;
+  margin-top: 16rpx;
+  min-height: 36rpx;
+  font-size: 24rpx;
+  color: #67726f;
+  word-break: break-all;
+}

@@ -1,18 +1,31 @@
 <view class="account-bar">
   <view class="account-copy">
-    <text class="hint">微信 ID</text>
-    <text class="account-id" selectable>{{wechatId || '未设置'}}</text>
+    <text class="hint">微信身份 · OpenID</text>
+    <text class="account-id" selectable>{{openid || (loading ? '正在登录' : '未登录')}}</text>
   </view>
-  <button class="text-button" bindtap="editWechatId">{{wechatId ? '修改' : '设置'}}</button>
 </view>
-<view class="list-heading">我的设备</view>
+<view class="door-section">
+  <text class="door-heading">门店通行</text>
+  <button class="door-button" bindtap="scanOpenDoor" loading="{{doorBusy}}" disabled="{{!doorConfigured || doorBusy || doorCooldown}}">
+    {{doorBusy ? '正在办理' : (doorCooldown ? '请稍候' : '扫一扫开门')}}
+  </button>
+  <text class="door-status" aria-live="polite">{{doorConfigured ? doorStatus : '开门服务未接入'}}</text>
+</view>
+<view class="list-heading">我的寄养 · {{cameras.length}} 个镜头</view>
+<button class="btn" bindtap="startBoarding" disabled="{{doorBusy}}">扫一扫寄养</button>
 
 <view wx:if="{{error}}" class="err">{{error}}</view>
-<view wx:if="{{!loading && !error && !cameras.length}}" class="hint">暂无设备</view>
+<view wx:if="{{!loading && !error && !cameras.length}}" class="hint">暂无有效寄养记录，请扫码寄养</view>
 
-<view wx:for="{{cameras}}" wx:key="*this" class="row" bindtap="openLive" data-cam="{{item}}">
-  <text>{{item}}</text>
-  <text class="arrow">预览</text>
+<view wx:if="{{cameras.length}}" class="camera-selection">
+  <text class="picker-label">寄养号码 / 镜头</text>
+  <picker mode="selector" range="{{cameras}}" range-key="label" value="{{cameraIndex}}" bindchange="selectCamera" disabled="{{loading}}">
+    <view class="camera-picker">
+      <text class="picker-value">{{cameras[cameraIndex].label}}</text>
+      <text class="picker-arrow">⌄</text>
+    </view>
+  </picker>
+  <button class="btn" bindtap="openLive" disabled="{{loading}}">打开镜头</button>
 </view>
 
 <button class="btn" bindtap="reload" loading="{{loading}}" disabled="{{loading}}">刷新设备</button>

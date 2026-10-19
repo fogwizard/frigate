@@ -1,0 +1,14 @@
+<view class="boarding-page">
+  <view class="boarding-heading">{{storeName || '门店寄养'}}</view>
+  <button class="btn" bindtap="scanBoarding" disabled="{{busy || pending}}">扫一扫寄养</button>
+  <view wx:if="{{cages.length}}" class="camera-selection">
+    <text class="picker-label">可用笼位 / 本次寄养费用</text>
+    <picker mode="selector" range="{{cages}}" range-key="label" value="{{cageIndex}}" bindchange="selectCage" disabled="{{busy || pending}}">
+      <view class="camera-picker">{{cages[cageIndex].label}}</view>
+    </picker>
+  </view>
+  <button wx:if="{{cages.length && !pending}}" class="btn" bindtap="payBoarding" disabled="{{busy}}" loading="{{busy}}">支付并开始寄养</button>
+  <button wx:if="{{pending}}" class="btn" bindtap="checkPayment" disabled="{{busy}}" loading="{{busy}}">查询支付结果</button>
+  <button wx:if="{{pending && canPay}}" class="btn" bindtap="payBoarding" disabled="{{busy}}">继续支付当前订单</button>
+  <view class="hint" aria-live="polite">{{status}}</view>
+</view>

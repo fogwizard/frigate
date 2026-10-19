@@ -1,0 +1,11 @@
+.boarding-page {
+  padding: 32rpx 0;
+  padding-bottom: calc(32rpx + env(safe-area-inset-bottom));
+}
+
+.boarding-heading {
+  margin: 0 32rpx 32rpx;
+  font-size: 36rpx;
+  font-weight: 600;
+  word-break: break-all;
+}

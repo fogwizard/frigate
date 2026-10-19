@@ -1,7 +1,8 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/live/live"
+    "pages/live/live",
+    "pages/boarding/boarding"
   ],
   "window": {
     "navigationBarTitleText": "视频喂食",

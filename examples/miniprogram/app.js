@@ -7,6 +7,8 @@ App({
     loginPath: "/api/miniprogram/login",
     feedPath: "",
     waterPath: "",
+    doorPath: "",
+    boardingPath: "",
     openid: "",
     sessionToken: "",
   },

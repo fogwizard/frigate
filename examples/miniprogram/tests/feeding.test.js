@@ -15,7 +15,7 @@ require("../app");
 function createPage() {
   return {
     ...definition,
-    data: { ...definition.data, camera: "camera-1", feedConfigured: true, waterConfigured: true },
+    data: { ...definition.data, cameras: [{ camera: "camera-1", label: "01号" }], camera: "camera-1", feedConfigured: true, waterConfigured: true },
     setData(update) { Object.assign(this.data, update); },
   };
 }
@@ -107,6 +107,8 @@ test("network failure reports uncertain outcome and never retries", async () => 
   assert.equal(requests.length, 1);
   assert.equal(page.data.feeding, false);
   assert.match(page.data.feedStatus, /核实设备状态/);
+  assert.equal(page.data.cooldown, true);
+  page.onUnload();
 });
 
 test("player state distinguishes playback, buffering, and interruption", () => {
@@ -193,6 +195,8 @@ test("watering timeout reports uncertain outcome without retrying", async () => 
   assert.equal(page.data.watering, false);
   assert.match(page.data.waterStatus, /核实设备状态/);
   assert.equal(page.data.feedStatus, "");
+  assert.equal(page.data.waterCooldown, true);
+  page.onUnload();
 });
 
 test("page derives feeding and watering availability independently", () => {
