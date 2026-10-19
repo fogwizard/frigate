@@ -1,20 +1,20 @@
-# HTTPS edge for WeChat mini-program HTTP-FLV
-# - Vigil FFmpeg restreams to MediaMTX (publisher); MTX does not pull cameras
-# - Upstream MediaMTX HLS/HTTP (default :8888)
+# HTTPS edge for WeChat mini-program HTTP-FLV via go2rtc
+# - Vigil FFmpeg restreams RTSP to go2rtc (:8554 publisher)
+# - go2rtc serves HTTP-FLV on :1984
 # - auth_request → Vigil GET /api/streams/auth?camera=&exp=&sig=
 #
-# Mini-program live-player src example (from Vigil /api/streams/{cam}/play):
+# Mini-program live-player src (from Vigil /api/streams/{cam}/play):
 #   https://stream.example.com/cam1.flv?exp=...&sig=...
 #
-# Note: MediaMTX may serve HLS under /cam1/; map or remux to FLV as needed for live-player.
+# WeChat requires a URL ending in .flv; nginx maps that to go2rtc's stream.flv API.
 # Install: include this server{} in nginx, set ssl_certificate, reload.
 
 upstream vigil_api {
     server 127.0.0.1:8970;
 }
 
-upstream mediamtx_http {
-    server 127.0.0.1:8888;
+upstream go2rtc_api {
+    server 127.0.0.1:1984;
 }
 
 server {
@@ -24,15 +24,17 @@ server {
     ssl_certificate     /etc/letsencrypt/live/stream.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/stream.example.com/privkey.pem;
 
-    # Client URL: /cam1.flv?exp=&sig=  → MediaMTX path /cam1/ (adjust per MTX version)
+    # /cam1.flv?exp=&sig=  →  go2rtc /api/stream.flv?src=cam1
     location ~ ^/(?<cam>[A-Za-z0-9_-]+)\.flv$ {
         set $flv_camera $cam;
         auth_request /_vigil_stream_auth;
 
-        proxy_pass http://mediamtx_http/$flv_camera/;
+        proxy_pass http://go2rtc_api/api/stream.flv?src=$flv_camera;
         proxy_http_version 1.1;
+        proxy_set_header Host $host;
         proxy_set_header Connection "";
         proxy_buffering off;
+        proxy_cache off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
     }

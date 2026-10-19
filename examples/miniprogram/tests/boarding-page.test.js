@@ -159,3 +159,137 @@ test("invalid server order amount never launches payment", async () => {
   assert.equal(payments, 0);
   assert.match(page.data.status, /订单金额无效/);
 });
+
+for (const status of ["closed", "cancelled", "refunded"]) {
+  test(`${status} order clears pending state without payment or navigation`, async () => {
+    page.savePending({ orderId: "order-1" });
+    const pending = page.checkPayment();
+    await flush();
+    requests[0].success({ statusCode: 200, data: { status, paymentStatus: status === "refunded" ? "refunded" : "pending" } });
+    await pending;
+    assert.equal(page.data.pending, false);
+    assert.equal(page.data.canPay, false);
+    assert.equal(page.pendingOrder, null);
+    assert.equal(storage.has("boarding-order:user-a"), false);
+    assert.equal(payments, 0);
+    assert.equal(navigations.length, 0);
+  });
+}
+
+test("declining initial confirmation creates no order and starts no payment", async () => {
+  wx.showModal = (options) => options.success({ confirm: false });
+  await page.payBoarding();
+  assert.equal(requests.length, 0);
+  assert.equal(storage.size, 0);
+  assert.equal(payments, 0);
+  assert.equal(page.data.busy, false);
+});
+
+test("declining final amount confirmation preserves order without charging", async () => {
+  wx.showModal = (options) => options.success({ confirm: options.title !== "确认订单金额" });
+  const { pending } = await beginPayment();
+  await pending;
+  assert.equal(payments, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(page.data.pending, true);
+  assert.equal(page.data.busy, false);
+  assert.equal(storage.get("boarding-order:user-a").orderId, "order-1");
+});
+
+test("cage inventory conflict preserves the attempt and cannot grant access", async () => {
+  const pending = page.payBoarding();
+  await flush();
+  const requestId = requests[0].data.requestId;
+  requests[0].success({ statusCode: 409, data: { error: "笼位已占用" } });
+  await pending;
+  assert.match(page.data.status, /笼位已占用/);
+  assert.equal(storage.get("boarding-order:user-a").requestId, requestId);
+  assert.equal(page.data.pending, true);
+  assert.equal(page.data.busy, false);
+  assert.equal(payments, 0);
+  assert.equal(navigations.length, 0);
+});
+
+test("payment callback followed by query timeout retains the order for manual recovery", async () => {
+  const { pending } = await beginPayment();
+  requests[1].fail({ errMsg: "request:fail timeout" });
+  await pending;
+  assert.equal(payments, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(page.data.pending, true);
+  assert.equal(page.data.canPay, false);
+  assert.equal(page.data.busy, false);
+  assert.match(page.data.status, /勿重复付款/);
+  assert.equal(navigations.length, 0);
+});
+
+test("paid but inactive order waits without querying records or reopening payment", async () => {
+  page.savePending({ orderId: "order-1" });
+  const pending = page.checkPayment();
+  await flush();
+  requests[0].success({ statusCode: 200, data: { paymentStatus: "paid", status: "processing" } });
+  await pending;
+  assert.equal(page.data.pending, true);
+  assert.equal(page.data.canPay, false);
+  assert.match(page.data.status, /等待寄养生效/);
+  assert.equal(requests.length, 1);
+  assert.equal(payments, 0);
+  assert.equal(navigations.length, 0);
+});
+
+test("another user's stored pending order is not restored", async () => {
+  storage.set("boarding-order:user-b", { orderId: "other-order" });
+  await page.onLoad();
+  assert.equal(page.data.pending, false);
+  assert.equal(page.pendingOrder, null);
+  assert.equal(storage.get("boarding-order:user-b").orderId, "other-order");
+  assert.equal(requests.length, 0);
+});
+
+test("expired session while querying payment preserves recovery state", async () => {
+  page.savePending({ orderId: "order-1" });
+  const pending = page.checkPayment();
+  await flush();
+  requests[0].success({ statusCode: 401, data: {} });
+  await pending;
+  assert.equal(app.globalData.sessionToken, "");
+  assert.equal(app.globalData.openid, "");
+  assert.equal(page.data.pending, true);
+  assert.equal(storage.get("boarding-order:user-a").orderId, "order-1");
+  assert.equal(page.data.busy, false);
+  assert.equal(requests.length, 1);
+  assert.equal(payments, 0);
+  assert.equal(navigations.length, 0);
+});
+
+test("scan cancellation is recoverable and never queries cages", async () => {
+  wx.scanCode = (options) => options.fail({ errMsg: "scanCode:fail cancel" });
+  await page.scanBoarding();
+  assert.equal(page.data.busy, false);
+  assert.equal(page.data.cages.length, 0);
+  assert.equal(requests.length, 0);
+  assert.equal(payments, 0);
+});
+
+test("camera permission denial reports an error and never creates an order", async () => {
+  wx.scanCode = (options) => options.fail({ errMsg: "scanCode:fail auth deny" });
+  await page.scanBoarding();
+  assert.match(page.data.status, /相机权限/);
+  assert.equal(page.data.busy, false);
+  assert.equal(requests.length, 0);
+  assert.equal(storage.size, 0);
+});
+
+test("late record response after unload never updates or navigates", async () => {
+  page.savePending({ orderId: "order-1" });
+  const pending = page.checkPayment();
+  await flush();
+  requests[0].success({ statusCode: 200, data: { paymentStatus: "paid", status: "active", recordId: "record-1", camera: "camera-1" } });
+  await flush();
+  page.onUnload();
+  page.setData = () => assert.fail("Unexpected update after unload");
+  requests[1].success({ statusCode: 200, data: { records: [{ id: "record-1", paymentStatus: "paid", status: "active", camera: "camera-1" }] } });
+  await pending;
+  assert.equal(navigations.length, 0);
+  assert.equal(storage.get("boarding-order:user-a").orderId, "order-1");
+});

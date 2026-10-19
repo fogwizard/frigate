@@ -2,9 +2,9 @@ use crate::db::Db;
 use crate::detect::CameraStatusMap;
 use crate::stream_sign::{self, AuthFail};
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -36,9 +36,20 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
         .route("/api/recordings", get(recordings))
         .route("/api/snapshots/{cam}", get(snapshot))
         .route("/api/media/{*path}", get(media_file))
-        .route("/api/streams", get(streams_list))
+        .route("/api/miniprogram/login", post(crate::mp_api::login))
+        .route("/api/streams", get(crate::mp_api::streams_list))
         .route("/api/streams/auth", get(streams_auth))
-        .route("/api/streams/{camera}/play", get(streams_play))
+        .route("/api/streams/{camera}/play", get(crate::mp_api::streams_play))
+        .route("/api/boarding/records", get(crate::mp_api::boarding_records))
+        .route("/api/boarding/cages", post(crate::mp_api::boarding_cages))
+        .route("/api/boarding/orders", post(crate::mp_api::boarding_create_order))
+        .route(
+            "/api/boarding/orders/{order_id}",
+            get(crate::mp_api::boarding_get_order),
+        )
+        .route("/api/feeding", post(crate::mp_api::feeding))
+        .route("/api/watering", post(crate::mp_api::watering))
+        .route("/api/doors/open", post(crate::mp_api::door_open))
         .nest_service("/files", ServeDir::new(data_dir))
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
@@ -133,57 +144,6 @@ async fn snapshot(
         .into_response())
 }
 
-fn require_stream_token(st: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
-    let expected = st.cfg.stream.api_token.trim();
-    if expected.is_empty() {
-        return Ok(());
-    }
-    let got = headers
-        .get("X-Vigil-Token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if got != expected {
-        return Err(AppError::unauthorized("missing or invalid X-Vigil-Token"));
-    }
-    Ok(())
-}
-
-fn require_stream_enabled(st: &AppState) -> Result<(), AppError> {
-    if !st.cfg.stream.enabled {
-        return Err(AppError::unavailable("stream sharing disabled"));
-    }
-    Ok(())
-}
-
-async fn streams_list(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, AppError> {
-    require_stream_enabled(&st)?;
-    require_stream_token(&st, &headers)?;
-    let mut cameras: Vec<_> = st.cfg.cameras.keys().cloned().collect();
-    cameras.sort();
-    Ok(Json(serde_json::json!({ "cameras": cameras })))
-}
-
-async fn streams_play(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(camera): Path<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    require_stream_enabled(&st)?;
-    require_stream_token(&st, &headers)?;
-    if !st.cfg.cameras.contains_key(&camera) {
-        return Err(AppError::not_found("camera not found"));
-    }
-    let play = stream_sign::issue_play_url(&st.cfg.stream, &camera, Utc::now());
-    Ok(Json(serde_json::json!({
-        "camera": camera,
-        "url": play.url,
-        "expires_at": play.expires_at,
-    })))
-}
-
 #[derive(Deserialize)]
 struct StreamAuthQuery {
     camera: String,
@@ -191,12 +151,14 @@ struct StreamAuthQuery {
     sig: String,
 }
 
-/// Nginx `auth_request` / MediaMTX external auth callback.
+/// Nginx `auth_request` / go2rtc edge auth callback (signed URL, no Bearer).
 async fn streams_auth(
     State(st): State<Arc<AppState>>,
     Query(q): Query<StreamAuthQuery>,
 ) -> Result<StatusCode, AppError> {
-    require_stream_enabled(&st)?;
+    if !st.cfg.stream.enabled {
+        return Err(AppError::unavailable("stream sharing disabled"));
+    }
     if !st.cfg.cameras.contains_key(&q.camera) {
         return Err(AppError::not_found("camera not found"));
     }
@@ -228,39 +190,46 @@ async fn media_file(
     Ok(([(axum::http::header::CONTENT_TYPE, ctype)], bytes).into_response())
 }
 
+#[derive(Debug)]
 pub struct AppError {
     status: StatusCode,
     msg: String,
 }
 
 impl AppError {
-    fn internal(e: impl ToString) -> Self {
+    pub(crate) fn internal(e: impl ToString) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             msg: e.to_string(),
         }
     }
-    fn not_found(msg: impl Into<String>) -> Self {
+    pub(crate) fn not_found(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
             msg: msg.into(),
         }
     }
-    fn unauthorized(msg: impl Into<String>) -> Self {
+    pub(crate) fn unauthorized(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
             msg: msg.into(),
         }
     }
-    fn forbidden(msg: impl Into<String>) -> Self {
+    pub(crate) fn forbidden(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
             msg: msg.into(),
         }
     }
-    fn unavailable(msg: impl Into<String>) -> Self {
+    pub(crate) fn unavailable(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
+            msg: msg.into(),
+        }
+    }
+    pub(crate) fn bad_request(msg: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
             msg: msg.into(),
         }
     }

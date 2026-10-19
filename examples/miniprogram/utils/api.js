@@ -23,17 +23,38 @@ function request(path, options = {}) {
   const context = { requestId, operation };
   logger.info("request.started", { ...context, outcome: "started" });
   return new Promise((resolve, reject) => {
-    wx.request({
+    let settled = false;
+    let task;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timedOut = () => {
+      if (settled) return;
+      logger.warn("request.timed_out", { ...context, elapsedMs: Date.now() - startedAt, outcome: "timeout" });
+      const error = new Error("请求超时，请检查网络；操作结果请先核实，勿重复提交");
+      error.code = "TIMEOUT";
+      finish(reject, error);
+    };
+    const timer = setTimeout(() => {
+      timedOut();
+      if (task && typeof task.abort === "function") task.abort();
+    }, 15000);
+    try {
+      task = wx.request({
       url: `${app.globalData.apiBase}${path}`,
       method: options.method || "GET",
       data: options.data,
       timeout: 15000,
       header: headers(authenticated),
       success(res) {
+        if (settled) return;
         const details = { ...context, statusCode: res.statusCode, elapsedMs: Date.now() - startedAt };
         if (res.statusCode >= 200 && res.statusCode < 300) {
           logger.info("request.completed", { ...details, outcome: "success" });
-          resolve(res.data);
+          finish(resolve, res.data);
         } else {
           logger.warn("request.completed", { ...details, outcome: res.statusCode === 403 ? "denied" : "failed" });
           if (authenticated && res.statusCode === 401) {
@@ -46,14 +67,25 @@ function request(path, options = {}) {
             ? "登录已失效，请刷新重新登录"
             : (res.data && res.data.error) || `HTTP ${res.statusCode}`);
           error.statusCode = res.statusCode;
-          reject(error);
+          finish(reject, error);
         }
       },
       fail(error) {
+        if (settled) return;
+        if (/timeout|timed out/i.test(error.errMsg || "")) {
+          timedOut();
+          return;
+        }
         logger.error("request.network_failed", { ...context, elapsedMs: Date.now() - startedAt, outcome: "failed" });
-        reject(new Error(error.errMsg || "网络请求失败"));
+        const failure = new Error(error.errMsg || "网络请求失败");
+        failure.code = "NETWORK_ERROR";
+        finish(reject, failure);
       },
-    });
+      });
+    } catch (error) {
+      logger.error("request.start_failed", { ...context, elapsedMs: Date.now() - startedAt, outcome: "failed" });
+      finish(reject, new Error("无法发起请求，请稍后重试"));
+    }
   });
 }
 

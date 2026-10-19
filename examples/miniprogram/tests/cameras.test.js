@@ -10,7 +10,8 @@ require("../pages/live/live");
 let app;
 let requests;
 
-beforeEach(() => {
+beforeEach((context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
   requests = [];
   app = { globalData: { openid: "user-a", sessionToken: "token-a", apiBase: "https://api.example.com", boardingPath: "/api/boarding" }, async login() {} };
   global.getApp = () => app;

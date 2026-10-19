@@ -27,9 +27,12 @@ pub struct Config {
     pub ffmpeg: FfmpegConfig,
     #[serde(default)]
     pub infer: InferConfig,
-    /// HTTP-FLV playback for WeChat mini-program (MediaMTX + signed URLs).
+    /// HTTP-FLV playback for WeChat mini-program (go2rtc + signed URLs).
     #[serde(default)]
     pub stream: StreamConfig,
+    /// WeChat mini-program login / boarding / device APIs.
+    #[serde(default)]
+    pub miniprogram: MiniprogramConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,14 +327,14 @@ impl Default for InferConfig {
 pub struct StreamConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// When true, combined FFmpeg also publishes a copy bitstream to MediaMTX
-    /// (camera is only opened once by Vigil; MTX does not pull the camera).
+    /// When true, combined FFmpeg also publishes a copy bitstream to go2rtc
+    /// (camera is only opened once by Vigil; go2rtc does not pull the camera).
     #[serde(default = "default_true")]
     pub restream: bool,
     /// FFmpeg publish URL template, e.g. `rtsp://127.0.0.1:8554/{camera}`.
     #[serde(default = "default_stream_publish_url")]
     pub publish_url_template: String,
-    /// Public HTTPS FLV origin (Nginx → MediaMTX), no trailing slash.
+    /// Public HTTPS FLV origin (Nginx → go2rtc HTTP-FLV), no trailing slash.
     #[serde(default = "default_stream_public_base")]
     pub public_base: String,
     /// Path template; `{camera}` replaced with camera name (e.g. `/{camera}` → `/cam1`).
@@ -398,9 +401,64 @@ impl StreamConfig {
         }
     }
 
-    /// Local MediaMTX publisher URL for this camera.
+    /// Local go2rtc RTSP publisher URL for this camera.
     pub fn publish_url(&self, camera: &str) -> String {
         self.publish_url_template.replace("{camera}", camera)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniprogramConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Skip WeChat code2session / pay; issue stable demo openid and auto-activate boarding.
+    #[serde(default = "default_true")]
+    pub demo_mode: bool,
+    #[serde(default = "default_demo_openid")]
+    pub demo_openid: String,
+    #[serde(default)]
+    pub wechat_app_id: String,
+    #[serde(default)]
+    pub wechat_app_secret: String,
+    #[serde(default = "default_mp_session_ttl")]
+    pub session_ttl_secs: i64,
+    /// OpenIDs that receive role=admin (full camera list).
+    #[serde(default)]
+    pub admin_openids: Vec<String>,
+    /// Cameras where admin gets canControl=true (feed/water).
+    #[serde(default)]
+    pub control_cameras: Vec<String>,
+}
+
+fn default_demo_openid() -> String {
+    "demo-admin".into()
+}
+fn default_mp_session_ttl() -> i64 {
+    86_400
+}
+
+impl Default for MiniprogramConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            demo_mode: true,
+            demo_openid: default_demo_openid(),
+            wechat_app_id: String::new(),
+            wechat_app_secret: String::new(),
+            session_ttl_secs: default_mp_session_ttl(),
+            admin_openids: vec!["demo-admin".into()],
+            control_cameras: Vec::new(),
+        }
+    }
+}
+
+impl MiniprogramConfig {
+    pub fn is_admin(&self, openid: &str) -> bool {
+        self.admin_openids.iter().any(|o| o == openid)
+    }
+
+    pub fn can_control(&self, camera: &str) -> bool {
+        self.control_cameras.is_empty() || self.control_cameras.iter().any(|c| c == camera)
     }
 }
 

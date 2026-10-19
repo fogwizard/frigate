@@ -1,7 +1,7 @@
 const numericFields = ["statusCode", "elapsedMs", "count", "code"];
 const booleanFields = ["isAdmin", "canControl", "pending"];
 const operations = new Set(["login", "streams", "records", "cages", "create_order", "order", "play", "feed", "water", "door", "unknown"]);
-const outcomes = new Set(["started", "success", "failed", "cancelled", "denied", "pending", "accepted", "opened", "active", "closed", "refunded", "unknown"]);
+const outcomes = new Set(["started", "success", "failed", "cancelled", "denied", "pending", "accepted", "opened", "active", "closed", "refunded", "unknown", "timeout"]);
 
 function write(level, event, details = {}) {
   const fields = {};

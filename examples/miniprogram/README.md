@@ -11,7 +11,7 @@
 ## 前置
 
 1. Vigil `stream.enabled: true`，`public_base` 为已备案 HTTPS  
-2. MediaMTX + Nginx（见 `packaging/`）  
+2. go2rtc + Nginx（见 `packaging/go2rtc.yaml`、`packaging/nginx-flv.conf.example`）  
 3. 微信公众平台配置 request / 合法域名：Vigil API 域名、流媒体域名  
 4. 真机才能稳定测直播；开发者工具可先看 `play` 接口是否返回 url  
 
@@ -21,7 +21,7 @@
 2. 改 `app.js` 里 `apiBase`、`loginPath`，使用真实小程序 AppID；实现下文的后端登录接口
 3. 编译预览  
 
-`live-player` 需要 **HTTP-FLV**。若 MediaMTX 当前只出 HLS，需把出口配成 FLV 或换能出 FLV 的网关。
+`live-player` 需要 **HTTP-FLV**。当前链路由 go2rtc 提供 `/api/stream.flv`，Nginx 对外暴露 `/cam.flv`（满足微信 `.flv` 后缀要求）。
 
 ## 微信身份与登录
 
@@ -37,7 +37,12 @@ AppSecret、微信 session_key 只留在后端，不得返回给小程序。
 用户身份和令牌只存于本次小程序运行内存；设备请求携带 `Authorization: Bearer <token>`。
 寄养记录、播放、喂食、喂水和开门接口都必须在后端校验用户权限，不信任前端传入的用户标识。
 接口返回 401 后清空登录身份，不自动重放设备操作。
-当前目录只有客户端示例，登录、用户设备绑定和门禁控制后端尚未提供，不能直接连接未改造鉴权的 Vigil API。
+Vigil 已实现对应后端（`demo_mode` 下可用）。默认演示：
+
+- 登录：`POST /api/miniprogram/login` → openid=`demo-admin`、role=`admin`
+- 寄养二维码 JSON：`{"type":"petshop-boarding","version":1,"token":"boarding_token_demo12345"}`
+- 开门二维码 JSON：`{"type":"petshop-door","version":1,"token":"door_challenge_demo123456"}`
+- `demo_mode` 下创建寄养订单会直接 `paid/active`，跳过真实微信支付
 
 直播页中间显示视频，底部为手动喂食和手动喂水按钮；播放失败时可点击“刷新画面”重新获取签名地址。
 
@@ -263,10 +268,27 @@ Content-Type: application/json
 
 ## 验证
 
+推荐在 `examples` 目录执行 `node ./miniprogram/tests/run.js`，自动发现并运行全部单元测试（包含接口契约和支付异常分支），无需逐个维护文件名。
+运行方式、覆盖矩阵和集成验收边界见 [单元测试说明](tests/README.md)。
+
 在 `examples` 目录执行 `node --test --test-reporter=dot ./miniprogram/tests/logger.test.js ./miniprogram/tests/admin.test.js ./miniprogram/tests/boarding-page.test.js ./miniprogram/tests/boarding.test.js ./miniprogram/tests/cameras.test.js ./miniprogram/tests/feeding.test.js ./miniprogram/tests/door.test.js`，验证日志脱敏、管理员例外、寄养支付、多镜头选择、登录鉴权、喂食喂水、二维码解析、开门确认、权限拒绝与异常保护。
 视频播放、原生组件布局与真实设备喂食、喂水仍需使用微信开发者工具及真机联调；普通浏览器无法运行该小程序。
 
 ## 日志与排查
+
+### 超时处理
+
+- 微信登录获取 code 最多等待 15 秒，平台回调缺失时主动结束等待，清理登录锁；用户可重新发起登录，迟到的旧 code 不会继续换取会话。
+- 每次 HTTP 请求最多等待 15 秒，同时使用微信请求超时和客户端计时保护；超时返回 `error.code = "TIMEOUT"`，尝试中止请求，并忽略该请求后续回调。
+- 获取视频地址后，首帧或连续缓冲最多等待 20 秒。超时会清空本次播放地址并提示刷新，不会自动持续拉流；播放恢复、切换、清空权限和退出页面都会清理视频等待计时器。
+- 登录 code 和后端登录请求分别有 15 秒上限，因此一次完整登录不保证在 15 秒内完成。
+- 支付确认界面、扫码和确认弹窗不强制设置用户操作倒计时；避免在用户仍确认付款时误判失败或重新下单。
+- 支付、开门、喂食和喂水相关请求超时均不自动重试。中止网络请求不能撤销服务器已接受的指令；先查询原订单或核实设备状态，再决定后续操作。
+
+超时日志为 `request.timed_out`、`login.timed_out`、`video.timed_out`，`outcome=timeout`。
+请求超时包含 operation、requestId 和 elapsedMs，不包含请求地址、身份、二维码凭证或签名信息；`request.network_failed` 用于其他网络故障，`request.start_failed` 表示平台无法发起请求。
+HTTP 非 2xx 仍通过 `request.completed` 记录 statusCode；HTTP 408/504 与客户端等待超时不是同一种事件。
+超时回归测试位于 `tests/timeout.test.js`，使用模拟时钟，不需要实际等待 15 或 20 秒。
 
 日志统一通过 `utils/logger.js` 输出到微信开发者工具 Console，真机可通过真机调试查看。
 按 `[miniprogram]` 或事件名筛选；info 记录流程关键节点，warn 记录拒绝、取消后的不确定状态或等待生效，error 记录网络、登录和播放器故障。

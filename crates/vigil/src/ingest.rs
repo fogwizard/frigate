@@ -144,7 +144,7 @@ async fn spawn_combined_ffmpeg(cfg: &Config, camera: &str, rtsp: &str) -> Result
     let segment = cfg.record.segment_secs.to_string();
     let vf = detect_vf(cfg);
 
-    // One FFmpeg: record + detect pipe [+ optional RTSP publish to MediaMTX].
+    // One FFmpeg: record + detect pipe [+ optional RTSP publish to go2rtc].
     let mut args: Vec<String> = vec![
         "-hide_banner".into(),
         "-loglevel".into(),
@@ -184,10 +184,10 @@ async fn spawn_combined_ffmpeg(cfg: &Config, camera: &str, rtsp: &str) -> Result
         "pipe:1".into(),
     ];
 
-    // Output 2: restream to MediaMTX (publisher). Camera is not pulled again by MTX.
+    // Output 2: restream to go2rtc (publisher). Camera is not pulled again by go2rtc.
     if cfg.stream.restream {
         let publish = cfg.stream.publish_url(camera);
-        info!(camera = %camera, %publish, "ffmpeg restream to MediaMTX");
+        info!(camera = %camera, %publish, "ffmpeg restream to go2rtc");
         args.extend([
             "-map".into(),
             "0:v:0".into(),

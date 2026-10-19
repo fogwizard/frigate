@@ -3,13 +3,13 @@ const logger = require("./utils/logger");
 
 App({
   globalData: {
-    // 换成你的 Vigil HTTPS API 根（不要末尾斜杠）
+    // 换成你的 Vigil HTTPS API 根（不要末尾斜杠）；本地调试可改代理目标
     apiBase: "https://api.example.com",
     loginPath: "/api/miniprogram/login",
-    feedPath: "",
-    waterPath: "",
-    doorPath: "",
-    boardingPath: "",
+    feedPath: "/api/feeding",
+    waterPath: "/api/watering",
+    doorPath: "/api/doors/open",
+    boardingPath: "/api/boarding",
     openid: "",
     sessionToken: "",
     role: "user",
@@ -22,17 +22,40 @@ App({
     if (this.loginPromise) return this.loginPromise;
     logger.info("login.started", { operation: "login", outcome: "started" });
     this.loginPromise = new Promise((resolve, reject) => {
-      wx.login({
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback(value);
+      };
+      const timedOut = () => {
+        if (settled) return;
+        logger.warn("login.timed_out", { operation: "login", outcome: "timeout" });
+        const error = new Error("微信登录超时，请重试");
+        error.code = "TIMEOUT";
+        finish(reject, error);
+      };
+      const timer = setTimeout(timedOut, 15000);
+      try {
+        wx.login({
         timeout: 15000,
         success(result) {
+          if (settled) return;
           if (!result.code) {
-            reject(new Error("微信登录未返回凭证，请重试"));
+            finish(reject, new Error("微信登录未返回凭证，请重试"));
             return;
           }
-          resolve(result.code);
+          finish(resolve, result.code);
         },
-        fail() { reject(new Error("微信登录失败，请重试")); },
-      });
+        fail(error) {
+          if (/timeout|timed out/i.test((error && error.errMsg) || "")) timedOut();
+          else finish(reject, new Error("微信登录失败，请重试"));
+        },
+        });
+      } catch (error) {
+        finish(reject, new Error("无法发起微信登录，请重试"));
+      }
     }).then((code) => api.loginWithCode(code)).then((session) => {
       if (!session || typeof session.openid !== "string" || !session.openid.trim() ||
           typeof session.token !== "string" || !session.token.trim()) {

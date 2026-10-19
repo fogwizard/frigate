@@ -50,7 +50,7 @@ impl Db {
         })
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
         self.conn
             .lock()
             .map_err(|_| anyhow::anyhow!("db lock poisoned"))

@@ -79,20 +79,32 @@ events:
 web:
   bind: "0.0.0.0:8970"
 
-# WeChat mini-program HTTP-FLV (MediaMTX + Nginx). API off by default.
-# Restream: Vigil FFmpeg publishes to MediaMTX so the camera is only opened once.
-# See packaging/mediamtx.yml and packaging/nginx-flv.conf.example
+# WeChat mini-program HTTP-FLV (go2rtc + Nginx).
+# Restream: Vigil FFmpeg publishes RTSP to go2rtc; go2rtc serves real HTTP-FLV for live-player.
+# See packaging/go2rtc.yaml and packaging/nginx-flv.conf.example
 stream:
-  enabled: false
+  enabled: true
   restream: true
-  # Must match MediaMTX rtspAddress + path name (publisher)
+  # Must match go2rtc rtsp.listen + stream name (publisher)
   publish_url_template: "rtsp://127.0.0.1:8554/{camera}"
+  # Nginx maps /{camera}.flv → go2rtc /api/stream.flv?src={camera}
   public_base: "https://stream.example.com"
   path_template: "/{camera}"
   sign_secret: "change-me"
   sign_ttl_secs: 120
-  # Required on /api/streams* when non-empty
   api_token: ""
+
+# Mini-program login / boarding / door / feed / water (see examples/miniprogram)
+miniprogram:
+  enabled: true
+  demo_mode: true
+  demo_openid: "demo-admin"
+  admin_openids: ["demo-admin"]
+  # Empty = admin canControl all cameras in demo
+  control_cameras: []
+  wechat_app_id: ""
+  wechat_app_secret: ""
+  session_ttl_secs: 86400
 
 paths:
   data_dir: data

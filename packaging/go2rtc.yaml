@@ -1,0 +1,26 @@
+# go2rtc — accept Vigil FFmpeg RTSP publish, serve real HTTP-FLV for WeChat live-player
+# Docs: https://github.com/AlexxIT/go2rtc
+#
+# Flow:
+#   Camera --RTSP--> Vigil FFmpeg (-c copy) --RTSP publish--> go2rtc(:8554)
+#   Mini-program <--HTTPS Nginx-- /cam1.flv <-- HTTP-FLV -- go2rtc(:1984)/api/stream.flv?src=cam1
+#
+# 1) Download go2rtc binary, then: go2rtc -config packaging/go2rtc.yaml
+# 2) Start Vigil with stream.restream: true
+# 3) Nginx: packaging/nginx-flv.conf.example
+#
+# Note: do NOT point streams at the camera here — Vigil already opens each lens once.
+
+api:
+  listen: ":1984"
+
+rtsp:
+  listen: ":8554"
+  # Publishers from Vigil appear as stream names matching the path (cam1, cam2, …)
+
+# Optional: pre-declare empty publishers so UI lists names before first publish.
+# go2rtc also creates streams dynamically when FFmpeg publishes to rtsp://127.0.0.1:8554/{name}
+streams: {}
+
+log:
+  level: info

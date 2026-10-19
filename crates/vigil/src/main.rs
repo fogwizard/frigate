@@ -6,6 +6,8 @@ mod detect;
 mod events;
 mod infer_client;
 mod ingest;
+mod mp_api;
+mod mp_db;
 mod proc_guard;
 mod record;
 mod stream_sign;
@@ -95,6 +97,11 @@ async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(cfg.live_snapshots_dir())?;
 
     let db = Arc::new(db::Db::open(&cfg.paths.db_path)?);
+    db.migrate_miniprogram()?;
+    if cfg.miniprogram.enabled {
+        let cams: Vec<String> = cfg.cameras.keys().cloned().collect();
+        db.seed_miniprogram_demo(&cams)?;
+    }
     let infer = Arc::new(infer_client::InferClient::new(cfg.clone())?);
     let infer_flag = infer.connected_flag();
     let events = Arc::new(events::EventEngine::new(cfg.clone(), db.clone()));

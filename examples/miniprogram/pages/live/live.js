@@ -61,6 +61,7 @@ Page({
 
   onUnload() {
     this.unloaded = true;
+    this.stopVideoWait();
     clearTimeout(this.feedTimer);
     clearTimeout(this.waterTimer);
   },
@@ -68,6 +69,7 @@ Page({
   loadCameras(preferredCamera = this.data.camera) {
     if (this.unloaded || this.data.camerasLoading || this.confirming || this.data.feeding || this.data.watering) return;
     this.playRequest = (this.playRequest || 0) + 1;
+    this.stopVideoWait();
     this.setData({ camerasLoading: true, cameras: [], camera: "", flvUrl: "", playing: false, loading: false, error: "", isAdmin: false, canControl: false });
     return getApp().login()
       .then(() => api.accessibleCameras())
@@ -110,6 +112,7 @@ Page({
   },
 
   clearAccess() {
+    this.stopVideoWait();
     this.playRequest = (this.playRequest || 0) + 1;
     this.setData({ cameras: [], camera: "", flvUrl: "", playing: false, loading: false, canControl: false, isAdmin: getApp().globalData.role === "admin", openid: getApp().globalData.openid });
   },
@@ -126,6 +129,8 @@ Page({
     }
     const playRequest = (this.playRequest || 0) + 1;
     this.playRequest = playRequest;
+    this.stopVideoWait();
+    this.videoTimedOut = false;
     this.setData({ loading: true, error: "", flvUrl: "", playing: false });
     return api
       .playUrl(camera)
@@ -135,6 +140,8 @@ Page({
         if (!data.url) {
           logger.warn("video.url_missing", { operation: "play", outcome: "failed" });
           this.setData({ error: "play 未返回 url" });
+        } else {
+          this.startVideoWait();
         }
       })
       .catch((e) => {
@@ -144,20 +151,43 @@ Page({
       });
   },
 
+  stopVideoWait() {
+    clearTimeout(this.videoTimer);
+    this.videoTimer = null;
+  },
+
+  startVideoWait() {
+    if (this.videoTimer || !this.data.flvUrl || this.unloaded) return;
+    const playRequest = this.playRequest;
+    this.videoTimer = setTimeout(() => {
+      this.videoTimer = null;
+      if (this.unloaded || this.playRequest !== playRequest || this.data.playing) return;
+      this.videoTimedOut = true;
+      logger.warn("video.timed_out", { operation: "play", outcome: "timeout" });
+      this.setData({ flvUrl: "", playing: false, loading: false, error: "视频连接或缓冲超时，请刷新画面重试" });
+    }, 20000);
+  },
+
   onState(e) {
+    if (this.unloaded || this.videoTimedOut) return;
     if (e.detail.code === 2004) {
+      this.stopVideoWait();
       if (!this.data.playing) logger.info("video.playing", { code: 2004 });
       this.setData({ playing: true, error: "" });
     } else if (e.detail.code === 2007) {
       if (this.data.playing) logger.warn("video.buffering", { code: 2007 });
       this.setData({ playing: false });
+      this.startVideoWait();
     } else if (e.detail.code < 0 || e.detail.code === 2103) {
+      this.stopVideoWait();
       logger.warn("video.interrupted", { code: e.detail.code });
       this.setData({ playing: false, error: "视频连接中断，请刷新重试" });
     }
   },
 
   onPlayerError(e) {
+    if (this.unloaded || this.videoTimedOut) return;
+    this.stopVideoWait();
     logger.error("video.player_failed", { code: e.detail && e.detail.errCode });
     this.setData({ playing: false, error: "视频暂时无法播放，请刷新重试" });
   },
