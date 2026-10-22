@@ -49,39 +49,40 @@ usb:
   # true = 只开 USB 这一路，跳过其它占位 RTSP
   only: true
 
-# 下面是占位地址（本机 8554 没有流时页面会黑屏/无信号）。
-# 请改成真实摄像头 RTSP，例如：
-#   rtsp://user:pass@192.168.1.10:554/Streaming/Channels/101
+# 大华 IPC / NVR。channel 从 1 开始；subtype=0 主码流（常见 H.265），subtype=1 子码流（常见 H.264）。
+# 本进程一路 FFmpeg 同时录像、检测、推 go2rtc，请用 H.264 的子码流，微信 live-player 才能 -c copy 播放。
+# 密码里的 @ : # & 空格要百分号编码。整段 URL 会作为单个参数传给 FFmpeg，& 不会被拆开。
+# 示例：rtsp://admin:密码@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1
 cameras:
   cam1:
     feed_slave: 1
     ffmpeg:
       inputs:
-        - path: rtsp://127.0.0.1:8554/cam1
+        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1
           roles: [record, detect]
   cam2:
     feed_slave: 2
     ffmpeg:
       inputs:
-        - path: rtsp://127.0.0.1:8554/cam2
+        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=2&subtype=1
           roles: [record, detect]
   cam3:
     feed_slave: 3
     ffmpeg:
       inputs:
-        - path: rtsp://127.0.0.1:8554/cam3
+        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=3&subtype=1
           roles: [record, detect]
   cam4:
     feed_slave: 4
     ffmpeg:
       inputs:
-        - path: rtsp://127.0.0.1:8554/cam4
+        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=4&subtype=1
           roles: [record, detect]
   cam5:
     feed_slave: 5
     ffmpeg:
       inputs:
-        - path: rtsp://127.0.0.1:8554/cam5
+        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=5&subtype=1
           roles: [record, detect]
 
 record:

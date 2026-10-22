@@ -169,6 +169,39 @@ fn detect_vf(cfg: &Config) -> String {
     )
 }
 
+/// Dahua IPC/NVR RTSP. The path stays one argv so `channel` and `subtype` are not split on `&`.
+///
+/// `subtype=0` is the main stream (often H.265). `subtype=1` is the sub stream, usually H.264,
+/// which `-c copy` can publish to go2rtc for the mini-program.
+fn push_dahua_rtsp_input_args(args: &mut Vec<String>, source: &str) {
+    args.extend([
+        "-rtsp_transport".into(),
+        "tcp".into(),
+        "-rtsp_flags".into(),
+        "prefer_tcp".into(),
+        // FFmpeg 5.x RTSP socket timeout, in microseconds. A silent Dahua peer must not hang forever.
+        "-timeout".into(),
+        "5000000".into(),
+        "-user_agent".into(),
+        "Dahua Rtsp Client".into(),
+        // Skip the G.711 audio track. This pipeline maps video only.
+        "-allowed_media_types".into(),
+        "video".into(),
+        "-fflags".into(),
+        "+genpts+discardcorrupt".into(),
+        "-avoid_negative_ts".into(),
+        "make_zero".into(),
+        "-use_wallclock_as_timestamps".into(),
+        "1".into(),
+        "-probesize".into(),
+        "32768".into(),
+        "-analyzeduration".into(),
+        "1000000".into(),
+        "-i".into(),
+        source.to_string(),
+    ]);
+}
+
 fn push_usb_input_args(args: &mut Vec<String>, usb: &UsbConfig) {
     let backend = usb.resolved_backend();
     if backend == "dshow" {
@@ -249,12 +282,7 @@ async fn spawn_combined_ffmpeg(
 
     match kind {
         SourceKind::Rtsp => {
-            args.extend([
-                "-rtsp_transport".into(),
-                "tcp".into(),
-                "-i".into(),
-                source.to_string(),
-            ]);
+            push_dahua_rtsp_input_args(&mut args, source);
         }
         SourceKind::Usb => {
             push_usb_input_args(&mut args, &cfg.usb);
@@ -465,6 +493,18 @@ mod tests {
                 "video=HD Webcam",
             ]
         );
+    }
+
+    #[test]
+    fn dahua_rtsp_args_keep_query_in_one_argv() {
+        let mut args = Vec::new();
+        let url = "rtsp://admin:pass@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1";
+        push_dahua_rtsp_input_args(&mut args, url);
+        assert_eq!(args.last().map(String::as_str), Some(url));
+        assert!(args.windows(2).any(|w| w == ["-rtsp_transport", "tcp"]));
+        assert!(args.windows(2).any(|w| w == ["-allowed_media_types", "video"]));
+        assert!(args.windows(2).any(|w| w == ["-user_agent", "Dahua Rtsp Client"]));
+        assert!(args.windows(2).any(|w| w == ["-timeout", "5000000"]));
     }
 
     #[test]
