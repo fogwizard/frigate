@@ -38,9 +38,7 @@ pub struct SignedPlay {
 
 pub fn issue_play_url(cfg: &StreamConfig, camera: &str, now: DateTime<Utc>) -> SignedPlay {
     let exp_unix = now.timestamp() + cfg.sign_ttl_secs as i64;
-    let sig = sign(&cfg.sign_secret, camera, exp_unix);
-    let base = cfg.flv_url(camera);
-    let url = format!("{base}?exp={exp_unix}&sig={sig}");
+    let url = cfg.play_url(camera);
     let expires_at = DateTime::from_timestamp(exp_unix, 0).unwrap_or(now);
     SignedPlay { url, expires_at }
 }
@@ -78,6 +76,14 @@ mod tests {
         assert!(verify("secret", "cam1", 1_700_000_000, &sig));
         assert!(!verify("secret", "cam2", 1_700_000_000, &sig));
         assert!(!verify("other", "cam1", 1_700_000_000, &sig));
+    }
+
+    #[test]
+    fn play_url_is_go2rtc_flv() {
+        let cfg = StreamConfig::default();
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let play = issue_play_url(&cfg, "cam1", now);
+        assert_eq!(play.url, "http://127.0.0.1:1984/api/stream.flv?src=cam1");
     }
 
     #[test]

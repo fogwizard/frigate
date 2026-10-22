@@ -112,6 +112,8 @@ stream:
   # Nginx maps /{camera}.flv → go2rtc /api/stream.flv?src={camera}
   public_base: "https://stream.example.com"
   path_template: "/{camera}"
+  # 小程序 live-player 使用的地址，与 ffplay 验证过的 go2rtc HTTP-FLV 一致
+  play_url_template: "http://127.0.0.1:1984/api/stream.flv?src={camera}"
   sign_secret: "change-me"
   sign_ttl_secs: 120
 

@@ -485,6 +485,10 @@ pub struct StreamConfig {
     /// Path template; `{camera}` replaced with camera name (e.g. `/{camera}` → `/cam1`).
     #[serde(default = "default_stream_path_template")]
     pub path_template: String,
+    /// URL handed to the mini-program `live-player`. `{camera}` is the stream name.
+    /// Default is go2rtc HTTP-FLV, the same link ffplay uses.
+    #[serde(default = "default_stream_play_url")]
+    pub play_url_template: String,
     #[serde(default = "default_stream_sign_secret")]
     pub sign_secret: String,
     #[serde(default = "default_stream_sign_ttl")]
@@ -496,6 +500,9 @@ fn default_stream_public_base() -> String {
 }
 fn default_stream_path_template() -> String {
     "/{camera}".into()
+}
+fn default_stream_play_url() -> String {
+    "http://127.0.0.1:1984/api/stream.flv?src={camera}".into()
 }
 fn default_stream_sign_secret() -> String {
     "change-me".into()
@@ -515,6 +522,7 @@ impl Default for StreamConfig {
             publish_url_template: default_stream_publish_url(),
             public_base: default_stream_public_base(),
             path_template: default_stream_path_template(),
+            play_url_template: default_stream_play_url(),
             sign_secret: default_stream_sign_secret(),
             sign_ttl_secs: default_stream_sign_ttl(),
         }
@@ -545,6 +553,11 @@ impl StreamConfig {
     /// Local go2rtc RTSP publisher URL for this camera.
     pub fn publish_url(&self, camera: &str) -> String {
         self.publish_url_template.replace("{camera}", camera)
+    }
+
+    /// HTTP-FLV URL for the mini-program player.
+    pub fn play_url(&self, camera: &str) -> String {
+        self.play_url_template.replace("{camera}", camera)
     }
 }
 

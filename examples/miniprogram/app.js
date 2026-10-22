@@ -3,8 +3,8 @@ const logger = require("./utils/logger");
 
 App({
   globalData: {
-    // 换成你的 Vigil HTTPS API 根（不要末尾斜杠）；本地调试可改代理目标
-    apiBase: "https://api.example.com",
+    // 本地 Vigil。播放地址由 /api/streams/{camera}/play 返回 go2rtc HTTP-FLV。
+    apiBase: "http://127.0.0.1:8970",
     loginPath: "/api/miniprogram/login",
     feedPath: "/api/feeding",
     waterPath: "/api/watering",
