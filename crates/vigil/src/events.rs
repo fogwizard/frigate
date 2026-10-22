@@ -15,6 +15,26 @@ struct ActiveEvent {
     event: Event,
     last_seen: chrono::DateTime<Utc>,
     max_score: f32,
+    box_xyxy: [f32; 4],
+}
+
+/// Intersection over union of two normalized xyxy boxes.
+fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let x1 = a[0].max(b[0]);
+    let y1 = a[1].max(b[1]);
+    let x2 = a[2].min(b[2]);
+    let y2 = a[3].min(b[3]);
+    let iw = (x2 - x1).max(0.0);
+    let ih = (y2 - y1).max(0.0);
+    let inter = iw * ih;
+    let area_a = (a[2] - a[0]).max(0.0) * (a[3] - a[1]).max(0.0);
+    let area_b = (b[2] - b[0]).max(0.0) * (b[3] - b[1]).max(0.0);
+    let union = area_a + area_b - inter;
+    if union <= 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
 }
 
 pub struct EventEngine {
@@ -39,13 +59,33 @@ impl EventEngine {
 
         {
             let mut active = self.active.lock().await;
+            let mut claimed = std::collections::HashSet::new();
             for d in dets {
-                let key = format!("{camera}:{}", d.label);
-                seen_labels.insert(key.clone());
-                if let Some(ae) = active.get_mut(&key) {
-                    ae.last_seen = now;
-                    ae.max_score = ae.max_score.max(d.score);
-                    ae.event.score = ae.max_score;
+                let mut best: Option<(String, f32)> = None;
+                for (key, ae) in active.iter() {
+                    if claimed.contains(key) {
+                        continue;
+                    }
+                    if ae.event.camera != camera || ae.event.label != d.label {
+                        continue;
+                    }
+                    let overlap = iou(ae.box_xyxy, d.xyxy);
+                    if overlap < 0.3 {
+                        continue;
+                    }
+                    if best.as_ref().map(|(_, score)| overlap > *score).unwrap_or(true) {
+                        best = Some((key.clone(), overlap));
+                    }
+                }
+                if let Some((key, _)) = best {
+                    claimed.insert(key.clone());
+                    seen_labels.insert(key.clone());
+                    if let Some(ae) = active.get_mut(&key) {
+                        ae.last_seen = now;
+                        ae.max_score = ae.max_score.max(d.score);
+                        ae.event.score = ae.max_score;
+                        ae.box_xyxy = d.xyxy;
+                    }
                     continue;
                 }
                 if jpeg.is_empty() {
@@ -71,12 +111,15 @@ impl EventEngine {
                 }
                 info!(camera = %camera, label = %d.label, id = %id, "event started");
                 started.push(event.clone());
+                let key = id.to_string();
+                seen_labels.insert(key.clone());
                 active.insert(
                     key,
                     ActiveEvent {
                         event,
                         last_seen: now,
                         max_score: d.score,
+                        box_xyxy: d.xyxy,
                     },
                 );
             }
@@ -99,7 +142,7 @@ impl EventEngine {
         let mut finished = Vec::new();
         active.retain(|key, ae| {
             if let Some(cam) = camera_filter {
-                if !key.starts_with(&format!("{cam}:")) {
+                if ae.event.camera != cam {
                     return true;
                 }
             }
@@ -245,5 +288,19 @@ async fn copy_segment(ffmpeg: &str, input: &PathBuf, output: &PathBuf) -> Result
         Ok(())
     } else {
         anyhow::bail!("ffmpeg clip failed")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iou;
+
+    #[test]
+    fn separate_boxes_are_different_tracks() {
+        let left = [0.0, 0.0, 0.2, 0.4];
+        let right = [0.7, 0.1, 0.95, 0.5];
+        assert!(iou(left, right) < 0.3);
+        let shifted = [0.02, 0.02, 0.22, 0.42];
+        assert!(iou(left, shifted) >= 0.3);
     }
 }

@@ -1,8 +1,9 @@
 use crate::db::Db;
 use crate::detect::CameraStatusMap;
 use crate::stream_sign::{self, AuthFail};
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -33,7 +34,10 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
         .route("/api/cameras", get(cameras))
         .route("/api/events", get(events))
         .route("/api/events/{id}", get(event_one))
+        .route("/api/events/{id}/snapshot", get(event_snapshot))
+        .route("/api/events/{id}/clip", get(event_clip))
         .route("/api/recordings", get(recordings))
+        .route("/api/recordings/{id}/file", get(recording_file))
         .route("/api/snapshots/{cam}", get(snapshot))
         .route("/api/media/{*path}", get(media_file))
         .route("/api/miniprogram/login", post(crate::mp_api::login))
@@ -80,8 +84,18 @@ async fn status(State(st): State<Arc<AppState>>) -> Json<StatusResponse> {
 }
 
 async fn cameras(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let names: Vec<_> = st.cfg.cameras.keys().cloned().collect();
-    Json(serde_json::json!({ "cameras": names }))
+    let mut names: Vec<_> = st.cfg.cameras.keys().cloned().collect();
+    names.sort();
+    let streams: Vec<_> = names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "name": name,
+                "live_url": st.cfg.stream.browser_play_url(name),
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "cameras": names, "streams": streams }))
 }
 
 #[derive(Deserialize)]
@@ -112,6 +126,113 @@ async fn event_one(
         Some(ev) => Ok(Json(serde_json::json!(ev))),
         None => Err(AppError::not_found("event not found")),
     }
+}
+
+async fn event_snapshot(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let ev = st
+        .db
+        .get_event(&id)
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::not_found("event not found"))?;
+    let path = ev
+        .snapshot_path
+        .ok_or_else(|| AppError::not_found("snapshot not available"))?;
+    serve_stored(&st.cfg.snapshots_dir(), &path, &headers)
+}
+
+async fn event_clip(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let ev = st
+        .db
+        .get_event(&id)
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::not_found("event not found"))?;
+    let path = ev
+        .clip_path
+        .ok_or_else(|| AppError::not_found("clip not available"))?;
+    serve_stored(&st.cfg.clips_dir(), &path, &headers)
+}
+
+async fn recording_file(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let seg = st
+        .db
+        .get_segment(id)
+        .map_err(AppError::internal)?
+        .ok_or_else(|| AppError::not_found("recording not found"))?;
+    serve_stored(&st.cfg.recordings_dir(), &seg.path, &headers)
+}
+
+fn serve_stored(root: &std::path::Path, stored: &str, headers: &HeaderMap) -> Result<Response, AppError> {
+    let file = std::path::PathBuf::from(stored);
+    let canon = file.canonicalize().map_err(|_| AppError::not_found("not found"))?;
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !canon.starts_with(&root) {
+        return Err(AppError::not_found("not found"));
+    }
+    let bytes = std::fs::read(&canon).map_err(AppError::internal)?;
+    let ctype = if canon.extension().and_then(|e| e.to_str()) == Some("mp4") {
+        "video/mp4"
+    } else {
+        "image/jpeg"
+    };
+    Ok(ranged_bytes(bytes, ctype, headers))
+}
+
+fn ranged_bytes(bytes: Vec<u8>, ctype: &'static str, headers: &HeaderMap) -> Response {
+    let len = bytes.len() as u64;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| parse_byte_range(h, len));
+    if let Some((start, end)) = range {
+        let slice = bytes[start as usize..=end as usize].to_vec();
+        return Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_TYPE, ctype)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{len}"),
+            )
+            .header(header::CONTENT_LENGTH, slice.len())
+            .body(Body::from(slice))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+    Response::builder()
+        .header(header::CONTENT_TYPE, ctype)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn parse_byte_range(header: &str, len: u64) -> Option<(u64, u64)> {
+    let rest = header.strip_prefix("bytes=")?;
+    let (start, end) = rest.split_once('-')?;
+    let start: u64 = start.parse().ok()?;
+    if start >= len {
+        return None;
+    }
+    let end = if end.is_empty() {
+        len - 1
+    } else {
+        end.parse::<u64>().ok()?.min(len - 1)
+    };
+    if end < start {
+        return None;
+    }
+    Some((start, end))
 }
 
 async fn recordings(

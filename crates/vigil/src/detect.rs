@@ -20,6 +20,7 @@ pub fn new_status_map(cameras: &[String]) -> CameraStatusMap {
                 recording: true,
                 detecting: true,
                 last_detection: None,
+                objects: Vec::new(),
             },
         );
     }
@@ -75,11 +76,12 @@ async fn detect_worker(
                             && d.score >= cfg.detect.score_threshold
                     })
                     .collect();
-                if !filtered.is_empty() {
-                    let mut st = statuses.write().await;
-                    if let Some(s) = st.get_mut(&job.camera) {
+                let mut st = statuses.write().await;
+                if let Some(s) = st.get_mut(&job.camera) {
+                    if !filtered.is_empty() {
                         s.last_detection = Some(Utc::now());
                     }
+                    s.objects = filtered.clone();
                 }
                 // Snapshot from shm if the slot was not overwritten yet.
                 let snap = if filtered.is_empty() {

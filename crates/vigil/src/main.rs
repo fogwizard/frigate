@@ -13,6 +13,7 @@ mod record;
 mod stream_sign;
 
 use anyhow::Context;
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -99,6 +100,10 @@ async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
     let _close_serial = CloseSerial;
 
     let db = Arc::new(db::Db::open(&cfg.paths.db_path)?);
+    let closed = db.close_open_events(Utc::now()).unwrap_or(0);
+    if closed > 0 {
+        info!(closed, "closed events left open by the previous process");
+    }
     db.migrate_miniprogram()?;
     if cfg.miniprogram.enabled {
         let cams: Vec<String> = cfg.cameras.keys().cloned().collect();

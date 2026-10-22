@@ -559,6 +559,11 @@ impl StreamConfig {
     pub fn play_url(&self, camera: &str) -> String {
         self.play_url_template.replace("{camera}", camera)
     }
+
+    /// Browser `<video>` URL. go2rtc's fMP4 endpoint, derived from the FLV template.
+    pub fn browser_play_url(&self, camera: &str) -> String {
+        self.play_url(camera).replace("stream.flv", "stream.mp4")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

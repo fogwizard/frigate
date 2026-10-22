@@ -32,46 +32,67 @@ async function loadLive() {
   try {
     const r = await fetch("/api/cameras");
     const j = await r.json();
-    const cams = j.cameras || [];
-    if (!cams.length) {
+    const streams = j.streams || (j.cameras || []).map((c) => ({ name: c, live_url: "" }));
+    if (!streams.length) {
       grid.innerHTML = '<div class="empty">未配置摄像头</div>';
       return;
     }
-    grid.innerHTML = cams
+    grid.innerHTML = streams
       .map(
-        (c) => `
-      <div class="card" data-cam="${c}">
-        <header><span>${c}</span><span class="meta nosignal">无信号</span></header>
+        (s) => `
+      <div class="card" data-cam="${s.name}">
+        <header><span>${s.name}</span><span class="meta nosignal">无信号</span></header>
         <div class="frame">
-          <img src="/api/snapshots/${encodeURIComponent(c)}?t=${Date.now()}" alt="${c}"
-               onload="this.closest('.card').querySelector('.meta').textContent='live';this.closest('.card').querySelector('.meta').classList.remove('nosignal')"
-               onerror="this.classList.add('dead');this.closest('.card').querySelector('.meta').textContent='无信号';this.closest('.card').querySelector('.meta').classList.add('nosignal')" />
-          <div class="placeholder">等待 RTSP 快照…<br/>请在 config 填写可达的摄像头地址</div>
+          <video src="${s.live_url}" autoplay muted playsinline></video>
+          <img alt="${s.name}" class="dead" />
+          <div class="boxes"></div>
+          <div class="placeholder">等待画面…</div>
         </div>
       </div>`
       )
       .join("");
+    grid.querySelectorAll("video").forEach((video) => {
+      const card = video.closest(".card");
+      const mark = (ok) => {
+        const meta = card.querySelector(".meta");
+        if (!meta) return;
+        meta.textContent = ok ? "live" : "无信号";
+        meta.classList.toggle("nosignal", !ok);
+      };
+      video.addEventListener("playing", () => {
+        video.style.display = "block";
+        card.querySelector("img").classList.add("dead");
+        mark(true);
+      });
+      video.addEventListener("error", () => {
+        video.style.display = "none";
+        mark(false);
+      });
+    });
   } catch (e) {
     grid.innerHTML = `<div class="empty">加载失败: ${e}</div>`;
   }
 }
 
 function refreshSnapshots() {
-  document.querySelectorAll("#live-grid img").forEach((img) => {
-    const card = img.closest("[data-cam]");
-    if (!card) return;
+  document.querySelectorAll("#live-grid .card").forEach((card) => {
+    const video = card.querySelector("video");
+    if (video && video.style.display !== "none" && !video.paused && video.readyState >= 2) return;
+    const img = card.querySelector("img");
+    if (!img) return;
     const cam = card.dataset.cam;
     const next = new Image();
     next.onload = () => {
       img.src = next.src;
       img.classList.remove("dead");
       const meta = card.querySelector(".meta");
-      if (meta) {
+      if (meta && (!video || video.style.display === "none")) {
         meta.textContent = "live";
         meta.classList.remove("nosignal");
       }
     };
     next.onerror = () => {
+      if (video && video.style.display !== "none") return;
       img.classList.add("dead");
       const meta = card.querySelector(".meta");
       if (meta) {
@@ -81,6 +102,28 @@ function refreshSnapshots() {
     };
     next.src = `/api/snapshots/${encodeURIComponent(cam)}?t=${Date.now()}`;
   });
+}
+
+async function refreshBoxes() {
+  try {
+    const r = await fetch("/api/status");
+    const j = await r.json();
+    const byName = new Map((j.cameras || []).map((c) => [c.name, c.objects || []]));
+    document.querySelectorAll("#live-grid .card").forEach((card) => {
+      const host = card.querySelector(".boxes");
+      if (!host) return;
+      const objects = byName.get(card.dataset.cam) || [];
+      host.innerHTML = objects
+        .map((o) => {
+          const [x1, y1, x2, y2] = o.xyxy;
+          const style = `left:${x1 * 100}%;top:${y1 * 100}%;width:${(x2 - x1) * 100}%;height:${(y2 - y1) * 100}%`;
+          return `<div class="box" style="${style}"><span>${o.label} ${(o.score * 100).toFixed(0)}%</span></div>`;
+        })
+        .join("");
+    });
+  } catch {
+    /* status is optional while the page is open */
+  }
 }
 
 async function loadEvents() {
@@ -95,15 +138,17 @@ async function loadEvents() {
     }
     list.innerHTML = events
       .map((e) => {
-        const snap = e.snapshot_path
-          ? `<img src="/api/snapshots/${encodeURIComponent(e.camera)}" alt="" />`
-          : `<img alt="" />`;
+        const snap = `<img src="/api/events/${encodeURIComponent(e.id)}/snapshot" alt="" />`;
         const end = e.end_time ? new Date(e.end_time).toLocaleString() : "进行中";
+        const clip = e.clip_path
+          ? `<video src="/api/events/${encodeURIComponent(e.id)}/clip" controls preload="none"></video>`
+          : "";
         return `<div class="row">
           ${snap}
           <div>
             <div class="title">${e.label} · ${e.camera}</div>
             <div class="sub">${new Date(e.start_time).toLocaleString()} → ${end} · score ${(e.score * 100).toFixed(0)}%</div>
+            ${clip}
           </div>
           <span class="badge">${e.id.slice(0, 8)}</span>
         </div>`;
@@ -128,10 +173,10 @@ async function loadRecordings() {
       .map((s) => {
         const end = s.end_time ? new Date(s.end_time).toLocaleString() : "…";
         return `<div class="row">
-          <img alt="" />
+          <video src="/api/recordings/${s.id}/file" controls preload="metadata"></video>
           <div>
             <div class="title">${s.camera}</div>
-            <div class="sub">${new Date(s.start_time).toLocaleString()} → ${end}<br/><code style="font-size:0.75rem;color:#8b9aab">${s.path}</code></div>
+            <div class="sub">${new Date(s.start_time).toLocaleString()} → ${end}</div>
           </div>
           <span class="badge">#${s.id}</span>
         </div>`;
@@ -146,6 +191,7 @@ loadLive();
 refreshHealth();
 setInterval(refreshHealth, 5000);
 setInterval(refreshSnapshots, 200);
+setInterval(refreshBoxes, 500);
 setInterval(() => {
   if ($("#page-live").classList.contains("active") && !$("#live-grid .card")) loadLive();
 }, 10000);

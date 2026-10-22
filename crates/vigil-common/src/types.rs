@@ -46,6 +46,9 @@ pub struct CameraStatus {
     pub recording: bool,
     pub detecting: bool,
     pub last_detection: Option<DateTime<Utc>>,
+    /// Latest boxes for this camera, normalized xyxy. Empty when nothing is in frame.
+    #[serde(default)]
+    pub objects: Vec<Detection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

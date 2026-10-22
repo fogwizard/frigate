@@ -79,6 +79,28 @@ impl Db {
         Ok(())
     }
 
+    pub fn get_segment(&self, id: i64) -> Result<Option<Segment>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, camera, path, start_time, end_time FROM segments WHERE id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![id], |row| {
+                Ok(Segment {
+                    id: row.get(0)?,
+                    camera: row.get(1)?,
+                    path: row.get(2)?,
+                    start_time: parse_dt(&row.get::<_, String>(3)?),
+                    end_time: row
+                        .get::<_, Option<String>>(4)?
+                        .as_deref()
+                        .map(parse_dt),
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
     pub fn list_segments(
         &self,
         camera: Option<&str>,
@@ -201,6 +223,15 @@ impl Db {
             conn.execute("DELETE FROM segments WHERE id = ?1", params![id])?;
         }
         Ok(ids.len())
+    }
+
+    pub fn close_open_events(&self, end: DateTime<Utc>) -> Result<usize> {
+        let conn = self.lock()?;
+        let n = conn.execute(
+            "UPDATE events SET end_time = ?1 WHERE end_time IS NULL",
+            params![end.to_rfc3339()],
+        )?;
+        Ok(n)
     }
 
     pub fn delete_old_segments(&self, before: DateTime<Utc>) -> Result<Vec<String>> {
