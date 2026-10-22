@@ -4,6 +4,7 @@ use crate::ingest;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, warn};
 use vigil_common::shm::{FrameRing, FORMAT_RGB8};
@@ -33,6 +34,8 @@ pub struct DetectJob {
     pub camera: String,
     pub slot: u32,
     pub seq: u64,
+    /// True when this frame differs from the previous one, or motion gating is off.
+    pub moved: bool,
 }
 
 pub async fn run_detect_pipeline(
@@ -63,29 +66,19 @@ async fn detect_worker(
     statuses: CameraStatusMap,
     mut rx: mpsc::Receiver<DetectJob>,
 ) {
-    let mut motion = MotionGate::default();
+    let mut idle = IdleProbe::default();
+    let mut empty_streak: HashMap<String, u32> = HashMap::new();
     while let Some(job) = rx.recv().await {
-        if cfg.detect.motion && !camera_has_objects(&statuses, &job.camera).await {
-            match infer.ring().peek(job.slot, job.seq) {
-                Ok(frame) if frame.format == FORMAT_RGB8 => {
-                    if !motion.scene_changed(
-                        &job.camera,
-                        &frame.data,
-                        frame.width,
-                        frame.height,
-                        cfg.detect.motion_threshold,
-                    ) {
-                        debug!(camera = %job.camera, "skip inference, scene unchanged");
-                        continue;
-                    }
-                }
-                _ => {}
-            }
+        let tracking = camera_has_objects(&statuses, &job.camera).await;
+        if cfg.detect.motion && !job.moved && !tracking && !idle.due(&job.camera, Duration::from_secs(5)) {
+            debug!(camera = %job.camera, "skip inference, scene still");
+            continue;
         }
         match infer.infer_slot(job.slot, job.seq).await {
             Ok(resp) => {
                 if let Some(err) = &resp.error {
                     warn!(error = %err, "infer error");
+                    continue;
                 }
                 let filtered: Vec<Detection> = resp
                     .detections
@@ -95,12 +88,22 @@ async fn detect_worker(
                             && d.score >= cfg.detect.score_threshold
                     })
                     .collect();
-                let mut st = statuses.write().await;
-                if let Some(s) = st.get_mut(&job.camera) {
-                    if !filtered.is_empty() {
-                        s.last_detection = Some(Utc::now());
+                let clear_boxes = if filtered.is_empty() {
+                    let n = empty_streak.entry(job.camera.clone()).or_insert(0);
+                    *n += 1;
+                    *n >= 3
+                } else {
+                    empty_streak.insert(job.camera.clone(), 0);
+                    true
+                };
+                if clear_boxes {
+                    let mut st = statuses.write().await;
+                    if let Some(s) = st.get_mut(&job.camera) {
+                        if !filtered.is_empty() {
+                            s.last_detection = Some(Utc::now());
+                        }
+                        s.objects = filtered.clone();
                     }
-                    s.objects = filtered.clone();
                 }
                 // Snapshot from shm if the slot was not overwritten yet.
                 let snap = if filtered.is_empty() {
@@ -135,26 +138,28 @@ async fn camera_has_objects(statuses: &CameraStatusMap, camera: &str) -> bool {
 const GRID_W: u32 = 32;
 const GRID_H: u32 = 18;
 
+/// Compares a coarse luma grid of frames the ingest loop already holds.
+/// This stays off the shared-memory read path so a still scene does not race the detector.
 #[derive(Default)]
-struct MotionGate {
+pub(crate) struct MotionSampler {
     prev: HashMap<String, Vec<u8>>,
 }
 
-impl MotionGate {
-    fn scene_changed(&mut self, camera: &str, rgb: &[u8], width: u32, height: u32, threshold: f32) -> bool {
+impl MotionSampler {
+    pub(crate) fn moved(&mut self, camera: &str, rgb: &[u8], width: u32, height: u32, threshold: f32) -> bool {
         let grid = luma_grid(rgb, width, height);
-        let changed = match self.prev.get(camera) {
+        let ratio = match self.prev.get(camera) {
             Some(prev) => changed_ratio(prev, &grid, 24),
             None => 1.0,
         };
         self.prev.insert(camera.to_string(), grid);
-        changed >= threshold
+        ratio >= threshold
     }
 }
 
 fn luma_grid(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
     let mut out = vec![0u8; (GRID_W * GRID_H) as usize];
-    if width == 0 || height == 0 || rgb.len() < (width * height * 3) as usize {
+    if width == 0 || height == 0 || rgb.len() < (width as usize) * (height as usize) * 3 {
         return out;
     }
     for gy in 0..GRID_H {
@@ -162,10 +167,7 @@ fn luma_grid(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
             let x = (gx * width / GRID_W).min(width - 1);
             let y = (gy * height / GRID_H).min(height - 1);
             let i = ((y * width + x) * 3) as usize;
-            let luma = (u16::from(rgb[i]) * 77
-                + u16::from(rgb[i + 1]) * 150
-                + u16::from(rgb[i + 2]) * 29)
-                >> 8;
+            let luma = (u16::from(rgb[i]) * 77 + u16::from(rgb[i + 1]) * 150 + u16::from(rgb[i + 2]) * 29) >> 8;
             out[(gy * GRID_W + gx) as usize] = luma as u8;
         }
     }
@@ -176,12 +178,25 @@ fn changed_ratio(prev: &[u8], next: &[u8], delta: u8) -> f32 {
     if prev.len() != next.len() || prev.is_empty() {
         return 1.0;
     }
-    let changed = prev
-        .iter()
-        .zip(next)
-        .filter(|(a, b)| a.abs_diff(**b) > delta)
-        .count();
+    let changed = prev.iter().zip(next).filter(|(a, b)| a.abs_diff(**b) > delta).count();
     changed as f32 / prev.len() as f32
+}
+
+/// Still, empty scenes are rechecked on this interval so a missed stationary object is found again.
+#[derive(Default)]
+struct IdleProbe {
+    last: HashMap<String, Instant>,
+}
+
+impl IdleProbe {
+    fn due(&mut self, camera: &str, interval: Duration) -> bool {
+        let now = Instant::now();
+        if self.last.get(camera).is_some_and(|t| now.duration_since(*t) < interval) {
+            return false;
+        }
+        self.last.insert(camera.to_string(), now);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -189,15 +204,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn still_scene_skips_and_a_real_change_does_not() {
-        let mut gate = MotionGate::default();
+    fn still_frame_does_not_move_until_the_picture_changes() {
+        let mut sampler = MotionSampler::default();
         let still = vec![40u8; 16 * 16 * 3];
-        assert!(gate.scene_changed("cam1", &still, 16, 16, 0.02));
-        assert!(!gate.scene_changed("cam1", &still, 16, 16, 0.02));
+        assert!(sampler.moved("cam1", &still, 16, 16, 0.02));
+        assert!(!sampler.moved("cam1", &still, 16, 16, 0.02));
         let mut moved = still.clone();
         for px in moved.iter_mut().step_by(2) {
             *px = 220;
         }
-        assert!(gate.scene_changed("cam1", &moved, 16, 16, 0.02));
+        assert!(sampler.moved("cam1", &moved, 16, 16, 0.02));
+    }
+
+    #[test]
+    fn idle_probe_waits_out_its_interval() {
+        let mut probe = IdleProbe::default();
+        assert!(probe.due("cam1", Duration::from_secs(60)));
+        assert!(!probe.due("cam1", Duration::from_secs(60)));
+        assert!(probe.due("cam1", Duration::ZERO));
     }
 }

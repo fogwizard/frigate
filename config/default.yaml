@@ -10,7 +10,7 @@ detect:
   height: 360
   labels: [person, cat, dog]
   score_threshold: 0.5
-  # 画面几乎不变且当前没有目标时跳过推理。有人站着不动时仍继续检测。
+  # 画面没变化且当前没有目标时跳过模型。有人在画面里时仍按 detect.fps 检测，静止空场景每 5 秒复查一次。
   motion: true
   motion_threshold: 0.02
 

@@ -91,6 +91,7 @@ h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.35rem; }
 }
 .card .frame {
   position: relative;
+  isolation: isolate;
   aspect-ratio: 16/9;
   background: #000;
 }
@@ -103,6 +104,10 @@ h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.35rem; }
   inset: 0;
   z-index: 1;
   background: #000;
+  /* Chrome draws a hardware video plane above normal elements. A tiny
+     opacity keeps the frame in the page layer so the boxes stay on top. */
+  opacity: 0.999;
+  transform: translateZ(0);
 }
 .card img {
   display: block;
@@ -113,7 +118,13 @@ h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.35rem; }
   inset: 0;
   z-index: 1;
 }
-.card .boxes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.card .boxes {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  inset: 0;
+  transform: translateZ(0);
+}
 .card .box {
   position: absolute;
   border: 2px solid var(--accent);

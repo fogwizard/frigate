@@ -386,6 +386,7 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
     let height = cfg.detect.height;
     let frame_len = cfg.detect.frame_bytes();
     let mut reader = BufReader::with_capacity(frame_len * 2, reader);
+    let mut motion = crate::detect::MotionSampler::default();
 
     loop {
         let mut slot_w = match ring.begin_write(&camera, width, height, FORMAT_RGB8, frame_len) {
@@ -406,6 +407,12 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
             let _ = std::fs::write(&live_path, jpeg);
         }
 
+        let moved = if cfg.detect.motion {
+            motion.moved(&camera, slot_w.payload(), width, height, cfg.detect.motion_threshold)
+        } else {
+            true
+        };
+
         let (slot, seq) = match slot_w.commit() {
             Ok(v) => v,
             Err(e) => {
@@ -418,6 +425,7 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
             camera: camera.clone(),
             slot,
             seq,
+            moved,
         };
         if tx.try_send(job).is_err() {
             debug!(camera = %camera, slot, seq, "detect queue full, dropping notify");

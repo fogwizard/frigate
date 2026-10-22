@@ -104,6 +104,35 @@ function refreshSnapshots() {
   });
 }
 
+function visibleMedia(card) {
+  const video = card.querySelector("video");
+  const img = card.querySelector("img");
+  if (video && video.style.display !== "none" && video.videoWidth > 0) return video;
+  if (img && !img.classList.contains("dead") && img.naturalWidth > 0) return img;
+  return null;
+}
+
+function placeBoxes(card, host) {
+  const media = visibleMedia(card);
+  const frame = card.querySelector(".frame");
+  if (!media || !frame) return;
+  const fw = frame.clientWidth;
+  const fh = frame.clientHeight;
+  const nw = media.videoWidth || media.naturalWidth;
+  const nh = media.videoHeight || media.naturalHeight;
+  if (!fw || !fh || !nw || !nh) return;
+  const fit = getComputedStyle(media).objectFit;
+  const scale = fit === "cover" ? Math.max(fw / nw, fh / nh) : Math.min(fw / nw, fh / nh);
+  const dw = nw * scale;
+  const dh = nh * scale;
+  host.style.left = `${(fw - dw) / 2}px`;
+  host.style.top = `${(fh - dh) / 2}px`;
+  host.style.right = "auto";
+  host.style.bottom = "auto";
+  host.style.width = `${dw}px`;
+  host.style.height = `${dh}px`;
+}
+
 async function refreshBoxes() {
   try {
     const r = await fetch("/api/status");
@@ -113,6 +142,7 @@ async function refreshBoxes() {
       const host = card.querySelector(".boxes");
       if (!host) return;
       const objects = byName.get(card.dataset.cam) || [];
+      placeBoxes(card, host);
       host.innerHTML = objects
         .map((o) => {
           const [x1, y1, x2, y2] = o.xyxy;
