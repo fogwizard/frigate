@@ -10,6 +10,9 @@ detect:
   height: 360
   labels: [person, cat, dog]
   score_threshold: 0.5
+  # 画面几乎不变且当前没有目标时跳过推理。有人站着不动时仍继续检测。
+  motion: true
+  motion_threshold: 0.02
 
 openvino:
   # device hint (ORT currently uses CPU; GPU EP reserved)

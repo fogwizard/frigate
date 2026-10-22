@@ -54,6 +54,12 @@ pub struct DetectConfig {
     pub labels: Vec<String>,
     #[serde(default = "default_score_threshold")]
     pub score_threshold: f32,
+    /// Skip inference when the frame is almost unchanged and nothing is currently tracked.
+    #[serde(default = "default_motion_enabled")]
+    pub motion: bool,
+    /// Fraction of the coarse grid that must change before a frame is sent to the model.
+    #[serde(default = "default_motion_threshold")]
+    pub motion_threshold: f32,
 }
 
 fn default_detect_fps() -> f32 {
@@ -75,6 +81,12 @@ fn default_labels() -> Vec<String> {
 fn default_score_threshold() -> f32 {
     0.5
 }
+fn default_motion_enabled() -> bool {
+    true
+}
+fn default_motion_threshold() -> f32 {
+    0.02
+}
 
 impl Default for DetectConfig {
     fn default() -> Self {
@@ -84,6 +96,8 @@ impl Default for DetectConfig {
             height: default_detect_height(),
             labels: default_labels(),
             score_threshold: default_score_threshold(),
+            motion: default_motion_enabled(),
+            motion_threshold: default_motion_threshold(),
         }
     }
 }

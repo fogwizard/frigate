@@ -2,9 +2,10 @@ use crate::events::EventEngine;
 use crate::infer_client::InferClient;
 use crate::ingest;
 use chrono::Utc;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use tracing::warn;
+use tracing::{debug, warn};
 use vigil_common::shm::{FrameRing, FORMAT_RGB8};
 use vigil_common::{CameraStatus, Config, Detection};
 
@@ -62,7 +63,25 @@ async fn detect_worker(
     statuses: CameraStatusMap,
     mut rx: mpsc::Receiver<DetectJob>,
 ) {
+    let mut motion = MotionGate::default();
     while let Some(job) = rx.recv().await {
+        if cfg.detect.motion && !camera_has_objects(&statuses, &job.camera).await {
+            match infer.ring().peek(job.slot, job.seq) {
+                Ok(frame) if frame.format == FORMAT_RGB8 => {
+                    if !motion.scene_changed(
+                        &job.camera,
+                        &frame.data,
+                        frame.width,
+                        frame.height,
+                        cfg.detect.motion_threshold,
+                    ) {
+                        debug!(camera = %job.camera, "skip inference, scene unchanged");
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+        }
         match infer.infer_slot(job.slot, job.seq).await {
             Ok(resp) => {
                 if let Some(err) = &resp.error {
@@ -106,4 +125,79 @@ fn frame_to_jpeg_snapshot(ring: &FrameRing, job: &DetectJob) -> Vec<u8> {
         return Vec::new();
     }
     ingest::rgb_to_jpeg(&frame.data, frame.width, frame.height, 80).unwrap_or_default()
+}
+
+async fn camera_has_objects(statuses: &CameraStatusMap, camera: &str) -> bool {
+    let st = statuses.read().await;
+    st.get(camera).is_some_and(|s| !s.objects.is_empty())
+}
+
+const GRID_W: u32 = 32;
+const GRID_H: u32 = 18;
+
+#[derive(Default)]
+struct MotionGate {
+    prev: HashMap<String, Vec<u8>>,
+}
+
+impl MotionGate {
+    fn scene_changed(&mut self, camera: &str, rgb: &[u8], width: u32, height: u32, threshold: f32) -> bool {
+        let grid = luma_grid(rgb, width, height);
+        let changed = match self.prev.get(camera) {
+            Some(prev) => changed_ratio(prev, &grid, 24),
+            None => 1.0,
+        };
+        self.prev.insert(camera.to_string(), grid);
+        changed >= threshold
+    }
+}
+
+fn luma_grid(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (GRID_W * GRID_H) as usize];
+    if width == 0 || height == 0 || rgb.len() < (width * height * 3) as usize {
+        return out;
+    }
+    for gy in 0..GRID_H {
+        for gx in 0..GRID_W {
+            let x = (gx * width / GRID_W).min(width - 1);
+            let y = (gy * height / GRID_H).min(height - 1);
+            let i = ((y * width + x) * 3) as usize;
+            let luma = (u16::from(rgb[i]) * 77
+                + u16::from(rgb[i + 1]) * 150
+                + u16::from(rgb[i + 2]) * 29)
+                >> 8;
+            out[(gy * GRID_W + gx) as usize] = luma as u8;
+        }
+    }
+    out
+}
+
+fn changed_ratio(prev: &[u8], next: &[u8], delta: u8) -> f32 {
+    if prev.len() != next.len() || prev.is_empty() {
+        return 1.0;
+    }
+    let changed = prev
+        .iter()
+        .zip(next)
+        .filter(|(a, b)| a.abs_diff(**b) > delta)
+        .count();
+    changed as f32 / prev.len() as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn still_scene_skips_and_a_real_change_does_not() {
+        let mut gate = MotionGate::default();
+        let still = vec![40u8; 16 * 16 * 3];
+        assert!(gate.scene_changed("cam1", &still, 16, 16, 0.02));
+        assert!(!gate.scene_changed("cam1", &still, 16, 16, 0.02));
+        let mut moved = still.clone();
+        for px in moved.iter_mut().step_by(2) {
+            *px = 220;
+        }
+        assert!(gate.scene_changed("cam1", &moved, 16, 16, 0.02));
+    }
 }
