@@ -36,6 +36,9 @@ pub struct Config {
     /// Local USB webcam for testing (replaces RTSP for one camera).
     #[serde(default)]
     pub usb: UsbConfig,
+    /// Feeder serial: last step of /api/feeding writes one Modbus RTU frame.
+    #[serde(default)]
+    pub feed: FeedConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +121,9 @@ impl Default for OpenvinoConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraConfig {
     pub ffmpeg: CameraFfmpeg,
+    /// Modbus RTU slave of the feeder for this camera. Required when `feed.port` is set.
+    #[serde(default)]
+    pub feed_slave: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +331,63 @@ impl UsbConfig {
             _ if cfg!(windows) => "dshow",
             _ => "v4l2",
         }
+    }
+}
+
+/// Modbus RTU write used by the feed command.
+///
+/// Empty `port` skips the serial write (auth still succeeds).
+/// Slave address is per camera (`cameras.*.feed_slave`), not global.
+/// Default frame is function 0x06 (write single holding register), 8N1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedConfig {
+    /// Windows `COM3`, Linux `/dev/ttyUSB0`. Empty = do not open a port.
+    #[serde(default)]
+    pub port: String,
+    #[serde(default = "default_feed_baud")]
+    pub baud: u32,
+    /// 0x05 write coil, 0x06 write single register.
+    #[serde(default = "default_feed_function")]
+    pub function: u8,
+    #[serde(default)]
+    pub address: u16,
+    /// Register value, or non-zero to energize a coil (0x05).
+    #[serde(default = "default_feed_value")]
+    pub value: u16,
+    /// Kept so older configs still load. The feed write waits 500 character times derived from `baud`.
+    #[serde(default = "default_feed_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_feed_baud() -> u32 {
+    9600
+}
+fn default_feed_function() -> u8 {
+    0x06
+}
+fn default_feed_value() -> u16 {
+    1
+}
+fn default_feed_timeout_ms() -> u64 {
+    500
+}
+
+impl Default for FeedConfig {
+    fn default() -> Self {
+        Self {
+            port: String::new(),
+            baud: default_feed_baud(),
+            function: default_feed_function(),
+            address: 0,
+            value: default_feed_value(),
+            timeout_ms: default_feed_timeout_ms(),
+        }
+    }
+}
+
+impl FeedConfig {
+    pub fn serial_enabled(&self) -> bool {
+        !self.port.trim().is_empty()
     }
 }
 

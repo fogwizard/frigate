@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/vigil-common",
+    "crates/vigil-modbus",
     "crates/vigil",
     "crates/vigil-infer",
 ]
@@ -14,6 +15,7 @@ authors = ["Vigil Contributors"]
 
 [workspace.dependencies]
 vigil-common = { path = "crates/vigil-common" }
+vigil-modbus = { path = "crates/vigil-modbus" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

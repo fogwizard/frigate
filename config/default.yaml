@@ -45,7 +45,7 @@ usb:
   fps: 15
   backend: dshow
   # go2rtc 未启动时务必保持 false，否则整路 FFmpeg 会退出、无画面
-  restream: false
+  restream: true
   # true = 只开 USB 这一路，跳过其它占位 RTSP
   only: true
 
@@ -54,26 +54,31 @@ usb:
 #   rtsp://user:pass@192.168.1.10:554/Streaming/Channels/101
 cameras:
   cam1:
+    feed_slave: 1
     ffmpeg:
       inputs:
         - path: rtsp://127.0.0.1:8554/cam1
           roles: [record, detect]
   cam2:
+    feed_slave: 2
     ffmpeg:
       inputs:
         - path: rtsp://127.0.0.1:8554/cam2
           roles: [record, detect]
   cam3:
+    feed_slave: 3
     ffmpeg:
       inputs:
         - path: rtsp://127.0.0.1:8554/cam3
           roles: [record, detect]
   cam4:
+    feed_slave: 4
     ffmpeg:
       inputs:
         - path: rtsp://127.0.0.1:8554/cam4
           roles: [record, detect]
   cam5:
+    feed_slave: 5
     ffmpeg:
       inputs:
         - path: rtsp://127.0.0.1:8554/cam5
@@ -109,6 +114,18 @@ stream:
   path_template: "/{camera}"
   sign_secret: "change-me"
   sign_ttl_secs: 120
+
+# 喂食最后一步：按 Modbus RTU（8N1）写一帧到串口，并等待从站回显。
+# 等待窗口是 500 个字符时间：9600 波特约 1ms/字节，即 500ms。超时无应答记「写入失败」。
+# 从站地址在各摄像头的 feed_slave 上，用来区分同一总线上的喂食器。
+# 默认功能码 0x06 写单个保持寄存器。port 为空则只鉴权、不写串口。
+feed:
+  port: ""          # Windows: COM3   Linux: /dev/ttyUSB0 ；启动时打开，退出时关闭
+  baud: 9600
+  function: 6       # 5=写线圈  6=写单个寄存器
+  address: 0
+  value: 1
+  timeout_ms: 500   # 兼容旧配置；实际等待由波特率换算
 
 # Mini-program login / boarding / door / feed / water (see examples/miniprogram)
 miniprogram:

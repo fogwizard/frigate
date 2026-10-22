@@ -5,7 +5,7 @@ pub mod shm;
 pub mod types;
 
 pub use config::{
-    CameraConfig, CameraFfmpeg, CameraInput, Config, MiniprogramConfig, PathsConfig, StreamConfig,
-    UsbConfig,
+    CameraConfig, CameraFfmpeg, CameraInput, Config, FeedConfig, MiniprogramConfig, PathsConfig,
+    StreamConfig, UsbConfig,
 };
 pub use types::*;

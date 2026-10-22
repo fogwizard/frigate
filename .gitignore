@@ -10,3 +10,4 @@ models/*.pt
 .DS_Store
 *.swp
 .env
+*.onnx

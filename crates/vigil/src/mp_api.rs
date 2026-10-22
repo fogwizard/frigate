@@ -333,7 +333,34 @@ pub async fn feeding(
     headers: HeaderMap,
     Json(body): Json<CameraBody>,
 ) -> Result<Json<Value>, AppError> {
-    device_action(&st, &headers, &body.camera, "feed").await
+    authorize_device(&st, &headers, &body.camera, "feed")?;
+    let feed = st.cfg.feed.clone();
+    let slave = st
+        .cfg
+        .cameras
+        .get(&body.camera)
+        .and_then(|c| c.feed_slave);
+    if feed.serial_enabled() && slave.is_none() {
+        return Err(AppError::bad_request(
+            "feeder slave not configured for camera",
+        ));
+    }
+    let slave = slave.unwrap_or(0);
+    tokio::task::spawn_blocking(move || {
+        vigil_modbus::write_feed(
+            &feed.port,
+            feed.baud,
+            slave,
+            feed.function,
+            feed.address,
+            feed.value,
+        )
+    })
+        .await
+        .map_err(AppError::internal)?
+        .map_err(AppError::internal)?;
+    tracing::info!(camera = %body.camera, slave, "feed command finished");
+    Ok(Json(json!({ "success": true, "status": "accepted" })))
 }
 
 pub async fn watering(
@@ -344,12 +371,12 @@ pub async fn watering(
     device_action(&st, &headers, &body.camera, "water").await
 }
 
-async fn device_action(
+fn authorize_device(
     st: &AppState,
     headers: &HeaderMap,
     camera: &str,
     kind: &str,
-) -> Result<Json<Value>, AppError> {
+) -> Result<(), AppError> {
     let session = session_from_headers(st, headers)?;
     if !st.cfg.cameras.contains_key(camera) {
         return Err(AppError::not_found("camera not found"));
@@ -365,6 +392,16 @@ async fn device_action(
         return Err(AppError::forbidden(format!("no {kind} permission")));
     }
     tracing::info!(openid = %session.openid, %camera, %kind, "miniprogram device command accepted");
+    Ok(())
+}
+
+async fn device_action(
+    st: &AppState,
+    headers: &HeaderMap,
+    camera: &str,
+    kind: &str,
+) -> Result<Json<Value>, AppError> {
+    authorize_device(st, headers, camera, kind)?;
     Ok(Json(json!({ "success": true, "status": "accepted" })))
 }
 
@@ -414,6 +451,7 @@ mod tests {
                         roles: vec!["record".into(), "detect".into()],
                     }],
                 },
+                feed_slave: name.strip_prefix("cam").and_then(|n| n.parse().ok()),
             },
         )
     }
@@ -470,6 +508,23 @@ mod tests {
 
     fn err_status(err: AppError) -> StatusCode {
         err.into_response().status()
+    }
+
+    #[tokio::test]
+    async fn feed_cam1_calls_write_feed_with_its_slave() {
+        let (st, admin, _) = setup(vec!["cam1".into()]);
+        assert_eq!(st.cfg.cameras["cam1"].feed_slave, Some(1));
+        let resp = feeding(
+            State(st),
+            auth(&admin),
+            Json(CameraBody {
+                camera: "cam1".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.0["success"], true);
+        assert_eq!(vigil_modbus::last_slave(), 1);
     }
 
     #[tokio::test]

@@ -176,6 +176,33 @@ impl Db {
         Ok(ev)
     }
 
+    pub fn delete_segments_under(&self, dir: &Path) -> Result<usize> {
+        let prefix = dir.to_string_lossy().to_string();
+        let alt = prefix.replace('\\', "/");
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT id, path FROM segments")?;
+        let ids: Vec<i64> = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .filter_map(|r| r.ok())
+            .filter_map(|(id, path)| {
+                let fwd = path.replace('\\', "/");
+                let under = |file: &str, root: &str| {
+                    file.starts_with(root)
+                        && file.as_bytes().get(root.len()).is_some_and(|b| *b == b'/' || *b == b'\\')
+                };
+                if under(&path, &prefix) || under(&fwd, &alt) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for id in &ids {
+            conn.execute("DELETE FROM segments WHERE id = ?1", params![id])?;
+        }
+        Ok(ids.len())
+    }
+
     pub fn delete_old_segments(&self, before: DateTime<Utc>) -> Result<Vec<String>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare("SELECT id, path FROM segments WHERE start_time < ?1")?;

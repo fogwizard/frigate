@@ -18,14 +18,18 @@ def main() -> None:
     if src.resolve() != dst.resolve():
         dst.write_bytes(src.read_bytes())
     print("wrote", dst)
+    print("Vigil loads this ONNX with ONNX Runtime. OpenVINO IR is not required.")
 
-    # Optional OpenVINO IR for Linux packaging with Intel runtime
+    # Optional. Ultralytics treats a missing openvino package as an export error
+    # and tries to pip-install it, which fails offline.
     try:
-        ov = m.export(format="openvino", dynamic=False, half=False)
-        print("also exported OpenVINO:", ov)
-        print("Rename/copy IR to models/yolo11n_coco.xml|.bin if needed")
-    except Exception as e:
-        print("OpenVINO export skipped:", e)
+        import openvino  # noqa: F401
+    except ImportError:
+        print("OpenVINO IR skipped: package not installed")
+        return
+
+    ov = m.export(format="openvino", dynamic=False)
+    print("also exported OpenVINO:", ov)
 
 
 if __name__ == "__main__":

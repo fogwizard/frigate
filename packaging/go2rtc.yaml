@@ -16,11 +16,16 @@ api:
 
 rtsp:
   listen: ":8554"
-  # Publishers from Vigil appear as stream names matching the path (cam1, cam2, …)
+  # Vigil publishes video only (no audio). Default video&audio makes go2rtc drop the session.
+  default_query: "video"
 
-# Optional: pre-declare empty publishers so UI lists names before first publish.
-# go2rtc also creates streams dynamically when FFmpeg publishes to rtsp://127.0.0.1:8554/{name}
-streams: {}
+# Names must exist before FFmpeg publishes. Empty list = no pull source, accept RTSP publish.
+streams:
+  cam1: []
+  cam2: []
+  cam3: []
+  cam4: []
+  cam5: []
 
 log:
   level: info

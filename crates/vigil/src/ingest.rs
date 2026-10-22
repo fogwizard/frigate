@@ -97,7 +97,7 @@ async fn run_combined(
     let _ = std::fs::create_dir_all(&live_dir);
 
     loop {
-        match spawn_combined_ffmpeg(&cfg, &camera, &source, &kind).await {
+        match spawn_combined_ffmpeg(&cfg, &db, &camera, &source, &kind).await {
             Ok(mut child) => {
                 let do_restream = restream_enabled(&cfg, &kind);
                 info!(
@@ -216,6 +216,7 @@ fn spawn_ffmpeg_stderr_logger(camera: String, stderr: impl tokio::io::AsyncRead 
 
 async fn spawn_combined_ffmpeg(
     cfg: &Config,
+    db: &Db,
     camera: &str,
     source: &str,
     kind: &SourceKind,
@@ -223,7 +224,12 @@ async fn spawn_combined_ffmpeg(
     let out_dir = cfg.recordings_dir().join(camera);
     std::fs::create_dir_all(&out_dir)?;
     let today = Utc::now().format("%Y-%m-%d").to_string();
-    std::fs::create_dir_all(out_dir.join(&today))?;
+    let day_dir = out_dir.join(&today);
+    let new_day = !day_dir.exists();
+    std::fs::create_dir_all(&day_dir)?;
+    if new_day {
+        record::prune_expired_days(&out_dir, cfg.record.retain_days, db, camera);
+    }
     let pattern = out_dir
         .join("%Y-%m-%d")
         .join("%H-%M-%S.mp4")
