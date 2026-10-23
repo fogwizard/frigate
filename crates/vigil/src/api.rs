@@ -52,6 +52,7 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
             get(crate::mp_api::boarding_get_order),
         )
         .route("/api/feeding", post(crate::mp_api::feeding))
+        .route("/api/feeding/clear", post(clear_feeding))
         .route("/api/watering", post(crate::mp_api::watering))
         .route("/api/doors/open", post(crate::mp_api::door_open))
         .nest_service("/files", ServeDir::new(data_dir))
@@ -81,6 +82,69 @@ async fn status(State(st): State<Arc<AppState>>) -> Json<StatusResponse> {
         health: health_status(&st).await,
         cameras,
     })
+}
+
+#[derive(Deserialize)]
+struct ClearQuery {
+    camera: Option<String>,
+}
+
+/// Delete this UTC day's feed rows. Restart Vigil after changing the clock so the
+/// scheduler reads the empty day from the database.
+async fn clear_feeding(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<ClearQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let camera = q
+        .camera
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
+    if let Some(name) = &camera {
+        if !st.cfg.cameras.contains_key(name) {
+            return Err(AppError::not_found("camera not found"));
+        }
+    }
+    let day = Utc::now().date_naive();
+    let removed = st
+        .db
+        .delete_feed_events_on_day(camera.as_deref(), day)
+        .map_err(AppError::internal)?;
+    for ev in &removed {
+        remove_feed_file(ev.snapshot_path.as_deref());
+        remove_feed_file(ev.clip_path.as_deref());
+    }
+    let cameras = match &camera {
+        Some(name) => vec![name.clone()],
+        None => {
+            let mut names: Vec<String> = st.cfg.cameras.keys().cloned().collect();
+            names.sort();
+            names
+        }
+    };
+    let n = removed.len();
+    tracing::info!(%day, removed = n, ?camera, "cleared today's feed events");
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "day": day.to_string(),
+        "removed": n,
+        "cameras": cameras,
+    })))
+}
+
+fn remove_feed_file(path: Option<&str>) {
+    let Some(path) = path else {
+        return;
+    };
+    let file = std::path::Path::new(path);
+    let parent = file
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .and_then(|name| name.to_str());
+    if matches!(parent, Some("clips") | Some("snapshots")) {
+        let _ = std::fs::remove_file(file);
+    }
 }
 
 async fn cameras(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {

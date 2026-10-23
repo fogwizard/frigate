@@ -200,6 +200,29 @@ impl Db {
         Ok(ev)
     }
 
+    /// Remove feed events whose start falls on this UTC date. Other labels stay.
+    pub fn delete_feed_events_on_day(
+        &self,
+        camera: Option<&str>,
+        day: chrono::NaiveDate,
+    ) -> Result<Vec<Event>> {
+        let conn = self.lock()?;
+        let like = format!("{day}%");
+        let mut stmt = conn.prepare(
+            "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note
+             FROM events WHERE label = 'feed' AND start_time LIKE ?1 AND (?2 IS NULL OR camera = ?2)",
+        )?;
+        let rows = stmt
+            .query_map(params![like, camera], map_event)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        conn.execute(
+            "DELETE FROM events WHERE label = 'feed' AND start_time LIKE ?1 AND (?2 IS NULL OR camera = ?2)",
+            params![like, camera],
+        )?;
+        Ok(rows)
+    }
+
     pub fn delete_event(&self, id: Uuid) -> Result<()> {
         let conn = self.lock()?;
         conn.execute("DELETE FROM events WHERE id = ?1", params![id.to_string()])?;
