@@ -20,6 +20,9 @@ pub struct Event {
     pub end_time: Option<DateTime<Utc>>,
     pub snapshot_path: Option<String>,
     pub clip_path: Option<String>,
+    /// Operator note, used by feed events (`成功` or a `失败：…` reason).
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

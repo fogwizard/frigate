@@ -356,9 +356,9 @@ pub async fn feeding(
             feed.value,
         )
     })
-        .await
-        .map_err(AppError::internal)?
-        .map_err(AppError::internal)?;
+    .await
+    .map_err(AppError::internal)?
+    .map_err(AppError::internal)?;
     tracing::info!(camera = %body.camera, slave, "feed command finished");
     Ok(Json(json!({ "success": true, "status": "accepted" })))
 }

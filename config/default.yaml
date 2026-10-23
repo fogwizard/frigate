@@ -131,13 +131,23 @@ stream:
 # 等待窗口是 500 个字符时间：9600 波特约 1ms/字节，即 500ms。超时无应答记「写入失败」。
 # 从站地址在各摄像头的 feed_slave 上，用来区分同一总线上的喂食器。
 # 默认功能码 0x06 写单个保持寄存器。port 为空则只鉴权、不写串口。
+# 每个摄像头在推理里判断：UTC 7:00–8:00 内一天只喂一次。
+# 写 value 打开，open_secs 秒后写 close_value 关闭。过了 8:00 不再尝试。
+# 喂食录像剪好后交给本机 Qwen 视觉模型判断粮食有没有出来。
+# base_url 是 OpenAI 兼容接口，model 要和本机服务里的模型名一致。
 feed:
   port: ""          # Windows: COM3   Linux: /dev/ttyUSB0 ；启动时打开，退出时关闭
   baud: 9600
   function: 6       # 5=写线圈  6=写单个寄存器
   address: 0
-  value: 1
+  value: 1          # 打开喂食器
+  close_value: 0    # 关闭喂食器
+  open_secs: 8
   timeout_ms: 500   # 兼容旧配置；实际等待由波特率换算
+  vlm:
+    base_url: http://127.0.0.1:8000/v1
+    model: qwen-vl-max-latest
+    api_key: ""
 
 # Mini-program login / boarding / door / feed / water (see examples/miniprogram)
 miniprogram:

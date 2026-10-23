@@ -315,6 +315,8 @@ async fn spawn_combined_ffmpeg(
             "ultrafast".into(),
             "-tune".into(),
             "zerolatency".into(),
+            "-g".into(),
+            "15".into(),
             "-pix_fmt".into(),
             "yuv420p".into(),
         ]);
@@ -330,6 +332,10 @@ async fn spawn_combined_ffmpeg(
         "1".into(),
         "-strftime".into(),
         "1".into(),
+        // Header is written up front, so the file being recorded can be cut
+        // before the next segment starts.
+        "-segment_format_options".into(),
+        "movflags=+frag_keyframe+empty_moov+default_base_moof".into(),
         pattern,
         // Output 1: raw RGB24 detection / live-preview frames
         "-map".into(),

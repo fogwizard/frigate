@@ -4,6 +4,7 @@ mod ctl;
 mod db;
 mod detect;
 mod events;
+mod feed;
 mod go2rtc;
 mod infer_client;
 mod ingest;

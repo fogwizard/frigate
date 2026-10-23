@@ -104,6 +104,7 @@ impl EventEngine {
                     end_time: None,
                     snapshot_path: Some(snap_path.to_string_lossy().to_string()),
                     clip_path: None,
+                    note: None,
                 };
                 if let Err(e) = self.db.insert_event(&event) {
                     warn!(error = %e, "insert event");

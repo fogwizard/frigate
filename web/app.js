@@ -186,6 +186,7 @@ async function loadEvents() {
           <div>
             <div class="title">${e.label} · ${e.camera}</div>
             <div class="sub">${new Date(e.start_time).toLocaleString()} → ${end} · score ${(e.score * 100).toFixed(0)}%</div>
+            ${e.note ? `<div class="sub">${e.note}</div>` : ""}
             ${clip}
           </div>
           <span class="badge">${e.id.slice(0, 8)}</span>

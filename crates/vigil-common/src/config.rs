@@ -374,6 +374,30 @@ pub struct FeedConfig {
     /// Kept so older configs still load. The feed write waits 500 character times derived from `baud`.
     #[serde(default = "default_feed_timeout_ms")]
     pub timeout_ms: u64,
+    /// How long the feeder stays open. The clip of this interval is sent to the VLM.
+    #[serde(default = "default_feed_open_secs")]
+    pub open_secs: u64,
+    /// Value written to close the feeder after `open_secs`.
+    #[serde(default)]
+    pub close_value: u16,
+    /// Kept so older configs still load. Feeding success comes from the VLM, not this threshold.
+    #[serde(default = "default_feed_motion_threshold")]
+    pub motion_threshold: f32,
+    #[serde(default)]
+    pub vlm: FeedVlmConfig,
+}
+
+/// Qwen vision model that watches the feed clip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedVlmConfig {
+    /// OpenAI-compatible root, without `/chat/completions`.
+    #[serde(default = "default_vlm_base")]
+    pub base_url: String,
+    #[serde(default = "default_vlm_model")]
+    pub model: String,
+    /// Optional. A local server does not need one. A remote server falls back to `DASHSCOPE_API_KEY`.
+    #[serde(default)]
+    pub api_key: String,
 }
 
 fn default_feed_baud() -> u32 {
@@ -388,6 +412,28 @@ fn default_feed_value() -> u16 {
 fn default_feed_timeout_ms() -> u64 {
     500
 }
+fn default_feed_open_secs() -> u64 {
+    8
+}
+fn default_feed_motion_threshold() -> f32 {
+    0.05
+}
+fn default_vlm_base() -> String {
+    "http://127.0.0.1:8000/v1".into()
+}
+fn default_vlm_model() -> String {
+    "qwen-vl-max-latest".into()
+}
+
+impl Default for FeedVlmConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_vlm_base(),
+            model: default_vlm_model(),
+            api_key: String::new(),
+        }
+    }
+}
 
 impl Default for FeedConfig {
     fn default() -> Self {
@@ -398,6 +444,10 @@ impl Default for FeedConfig {
             address: 0,
             value: default_feed_value(),
             timeout_ms: default_feed_timeout_ms(),
+            open_secs: default_feed_open_secs(),
+            close_value: 0,
+            motion_threshold: default_feed_motion_threshold(),
+            vlm: FeedVlmConfig::default(),
         }
     }
 }

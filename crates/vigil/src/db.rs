@@ -45,6 +45,7 @@ impl Db {
             );
             ",
         )?;
+        let _ = conn.execute("ALTER TABLE events ADD COLUMN note TEXT", []);
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -144,8 +145,8 @@ impl Db {
     pub fn insert_event(&self, event: &Event) -> Result<()> {
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO events (id, camera, label, score, start_time, end_time, snapshot_path, clip_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO events (id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 event.id.to_string(),
                 event.camera,
@@ -155,7 +156,17 @@ impl Db {
                 event.end_time.map(|t| t.to_rfc3339()),
                 event.snapshot_path,
                 event.clip_path,
+                event.note,
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_event_note(&self, id: Uuid, note: &str, score: f32) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE events SET note = ?1, score = ?2 WHERE id = ?3",
+            params![note, score, id.to_string()],
         )?;
         Ok(())
     }
@@ -176,10 +187,20 @@ impl Db {
         Ok(())
     }
 
+    pub fn has_feed_event(&self, camera: &str, day: chrono::NaiveDate) -> Result<bool> {
+        let conn = self.lock()?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE camera = ?1 AND label = 'feed' AND start_time LIKE ?2",
+            params![camera, format!("{day}%")],
+            |row| row.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     pub fn list_events(&self, camera: Option<&str>, limit: i64) -> Result<Vec<Event>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path FROM events
+            "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note FROM events
              WHERE (?1 IS NULL OR camera = ?1)
              ORDER BY start_time DESC LIMIT ?2",
         )?;
@@ -192,7 +213,7 @@ impl Db {
     pub fn get_event(&self, id: &str) -> Result<Option<Event>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path FROM events WHERE id = ?1",
+            "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note FROM events WHERE id = ?1",
         )?;
         let ev = stmt.query_row(params![id], map_event).optional()?;
         Ok(ev)
@@ -284,6 +305,7 @@ fn map_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
             .map(parse_dt),
         snapshot_path: row.get(6)?,
         clip_path: row.get(7)?,
+        note: row.get(8)?,
     })
 }
 
