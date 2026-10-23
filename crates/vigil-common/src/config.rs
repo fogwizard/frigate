@@ -141,6 +141,9 @@ pub struct CameraConfig {
     /// Modbus RTU slave of the feeder for this camera. Required when `feed.port` is set.
     #[serde(default)]
     pub feed_slave: Option<u8>,
+    /// How long this camera's feeder stays open, in seconds.
+    #[serde(default = "default_feed_time")]
+    pub feed_time: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,6 +416,9 @@ fn default_feed_timeout_ms() -> u64 {
     500
 }
 fn default_feed_open_secs() -> u64 {
+    8
+}
+fn default_feed_time() -> u64 {
     8
 }
 fn default_feed_motion_threshold() -> f32 {

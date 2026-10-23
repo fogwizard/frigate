@@ -334,6 +334,14 @@ pub async fn feeding(
     Json(body): Json<CameraBody>,
 ) -> Result<Json<Value>, AppError> {
     authorize_device(&st, &headers, &body.camera, "feed")?;
+    if st
+        .cfg
+        .cameras
+        .get(&body.camera)
+        .is_some_and(|c| c.feed_time == 0)
+    {
+        return Err(AppError::bad_request("feeding disabled"));
+    }
     let feed = st.cfg.feed.clone();
     let slave = st
         .cfg
@@ -452,6 +460,7 @@ mod tests {
                     }],
                 },
                 feed_slave: name.strip_prefix("cam").and_then(|n| n.parse().ok()),
+                feed_time: 8,
             },
         )
     }

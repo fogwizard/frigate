@@ -150,6 +150,15 @@ async fn tick_feed(
 ) {
     use crate::feed::{save_event, Step};
 
+    let open_secs = cfg
+        .cameras
+        .get(&job.camera)
+        .map(|c| c.feed_time)
+        .unwrap_or(8);
+    if open_secs == 0 {
+        return;
+    }
+
     let now = Utc::now();
     let day = now.date_naive();
     let key = (day, job.camera.clone());
@@ -165,7 +174,7 @@ async fn tick_feed(
         .get(&job.camera)
         .and_then(|c| c.feed_slave)
         .unwrap_or(0);
-    match feeds.step(&job.camera, now, already, cfg.feed.open_secs) {
+    match feeds.step(&job.camera, now, already, open_secs) {
         Step::None => {}
         Step::Open => match write_feed(&cfg, slave, cfg.feed.value).await {
             Ok(()) => tracing::info!(camera = %job.camera, slave, "feeder opened"),

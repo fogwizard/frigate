@@ -49,6 +49,9 @@ impl CameraFeeds {
     /// `already_fed` is true when this camera already has a feed event today.
     /// `open_secs` is how long the feeder stays on. The picture is not inspected here.
     pub fn step(&mut self, camera: &str, now: DateTime<Utc>, already_fed: bool, open_secs: u64) -> Step {
+        if open_secs == 0 {
+            return Step::None;
+        }
         let day = now.date_naive();
         let cam = self.cameras.entry(camera.to_string()).or_insert(Cam {
             day,
@@ -81,7 +84,7 @@ impl CameraFeeds {
             }
             Phase::Open { start } => {
                 let elapsed = now.signed_duration_since(start).num_seconds();
-                if now.hour() != WINDOW_HOUR || elapsed >= open_secs.max(1) as i64 {
+                if now.hour() != WINDOW_HOUR || elapsed >= open_secs as i64 {
                     cam.phase = Phase::Done;
                     Step::Close { start }
                 } else {
@@ -506,6 +509,14 @@ mod tests {
         assert_eq!(feeds.step("cam1", due, false, 8), Step::Close { start });
         let later = Utc.with_ymd_and_hms(2026, 10, 23, 7, 1, 0).unwrap();
         assert_eq!(feeds.step("cam1", later, false, 8), Step::None);
+    }
+
+    #[test]
+    fn zero_feed_time_does_not_open_or_close() {
+        let mut feeds = CameraFeeds::default();
+        assert_eq!(feeds.step("cam1", at(7, 0), false, 0), Step::None);
+        assert_eq!(feeds.step("cam1", at(7, 30), false, 0), Step::None);
+        assert_eq!(feeds.step("cam1", at(8, 0), false, 0), Step::None);
     }
 
     #[test]

@@ -59,30 +59,35 @@ usb:
 cameras:
   cam1:
     feed_slave: 1
+    feed_time: 8          # 秒。0 表示这路不喂食
     ffmpeg:
       inputs:
         - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1
           roles: [record, detect]
   cam2:
     feed_slave: 2
+    feed_time: 8
     ffmpeg:
       inputs:
         - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=2&subtype=1
           roles: [record, detect]
   cam3:
     feed_slave: 3
+    feed_time: 8
     ffmpeg:
       inputs:
         - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=3&subtype=1
           roles: [record, detect]
   cam4:
     feed_slave: 4
+    feed_time: 8
     ffmpeg:
       inputs:
         - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=4&subtype=1
           roles: [record, detect]
   cam5:
     feed_slave: 5
+    feed_time: 8
     ffmpeg:
       inputs:
         - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=5&subtype=1
@@ -132,7 +137,7 @@ stream:
 # 从站地址在各摄像头的 feed_slave 上，用来区分同一总线上的喂食器。
 # 默认功能码 0x06 写单个保持寄存器。port 为空则只鉴权、不写串口。
 # 每个摄像头在推理里判断：UTC 7:00–8:00 内一天只喂一次。
-# 写 value 打开，open_secs 秒后写 close_value 关闭。过了 8:00 不再尝试。
+# 写 value 打开，经过该摄像头的 feed_time 秒后写 close_value 关闭。过了 8:00 不再尝试。
 # 喂食录像剪好后交给本机 Qwen 视觉模型判断粮食有没有出来。
 # base_url 是 OpenAI 兼容接口，model 要和本机服务里的模型名一致。
 feed:
@@ -142,7 +147,6 @@ feed:
   address: 0
   value: 1          # 打开喂食器
   close_value: 0    # 关闭喂食器
-  open_secs: 8
   timeout_ms: 500   # 兼容旧配置；实际等待由波特率换算
   vlm:
     base_url: http://127.0.0.1:8000/v1
