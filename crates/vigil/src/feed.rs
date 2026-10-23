@@ -1,8 +1,9 @@
-//! Daily feed decided inside each camera's inference loop.
+//! Daily feed for each camera.
 //!
-//! UTC 07:00–08:00 opens the feeder once for `open_secs`, then closes it.
-//! The clip of that interval is sent to a Qwen vision model, which decides
-//! whether food came out. After 08:00 this UTC day does not try again.
+//! UTC 07:00–08:00 opens the feeder once for that camera's `feed_time`, then
+//! closes it. The clip of that interval is sent to a Qwen vision model, which
+//! decides whether food came out. After 08:00 this UTC day does not try again.
+//! Closing is retried until the write succeeds, including after a restart.
 
 use crate::db::Db;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
@@ -15,13 +16,19 @@ use uuid::Uuid;
 use vigil_common::{Config, Event};
 
 const WINDOW_HOUR: u32 = 7;
+pub const NOTE_FEEDING: &str = "喂食中";
+pub const NOTE_REVIEWING: &str = "分析中";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     None,
     Open,
-    /// Feeder was opened; close it and record the result.
-    Close { start: DateTime<Utc> },
+    /// Close the feeder. `write` is false once a close has already succeeded.
+    Close {
+        start: DateTime<Utc>,
+        write: bool,
+        event_id: Option<Uuid>,
+    },
     /// The window ended before an open succeeded.
     GiveUp,
 }
@@ -38,6 +45,25 @@ struct Cam {
     phase: Phase,
     tried_open: bool,
     retry_at: DateTime<Utc>,
+    event_id: Option<Uuid>,
+    close_ok: bool,
+    reviewed: bool,
+    recorded: bool,
+}
+
+impl Cam {
+    fn fresh(day: NaiveDate) -> Self {
+        Self {
+            day,
+            phase: Phase::Wait,
+            tried_open: false,
+            retry_at: DateTime::UNIX_EPOCH,
+            event_id: None,
+            close_ok: false,
+            reviewed: false,
+            recorded: false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -46,49 +72,137 @@ pub struct CameraFeeds {
 }
 
 impl CameraFeeds {
-    /// `already_fed` is true when this camera already has a feed event today.
-    /// `open_secs` is how long the feeder stays on. The picture is not inspected here.
+    pub fn is_open(&self, camera: &str) -> bool {
+        self.cameras
+            .get(camera)
+            .is_some_and(|cam| matches!(cam.phase, Phase::Open { .. }))
+    }
+
+    pub fn event_id(&self, camera: &str) -> Option<Uuid> {
+        self.cameras.get(camera).and_then(|cam| cam.event_id)
+    }
+
+    pub fn set_event(&mut self, camera: &str, id: Uuid) {
+        if let Some(cam) = self.cameras.get_mut(camera) {
+            cam.event_id = Some(id);
+        }
+    }
+
+    pub fn ack_close(&mut self, camera: &str) {
+        let Some(cam) = self.cameras.get_mut(camera) else {
+            return;
+        };
+        cam.close_ok = true;
+        if cam.reviewed {
+            cam.phase = Phase::Done;
+        }
+    }
+
+    /// First call after a successful close schedules the clip review once.
+    pub fn mark_reviewed(&mut self, camera: &str) -> bool {
+        let Some(cam) = self.cameras.get_mut(camera) else {
+            return false;
+        };
+        if cam.reviewed {
+            return false;
+        }
+        cam.reviewed = true;
+        if cam.close_ok {
+            cam.phase = Phase::Done;
+        }
+        true
+    }
+
+    pub fn mark_give_up(&mut self, camera: &str) {
+        if let Some(cam) = self.cameras.get_mut(camera) {
+            cam.recorded = true;
+        }
+    }
+
+    /// A restart found an unfinished feed event. Keep that open interval and close it
+    /// when `feed_time` has elapsed instead of opening the feeder a second time.
+    pub fn adopt(&mut self, camera: &str, start: DateTime<Utc>, id: Uuid) {
+        let day = start.date_naive();
+        let cam = self
+            .cameras
+            .entry(camera.to_string())
+            .or_insert_with(|| Cam::fresh(day));
+        if !matches!(cam.phase, Phase::Wait) {
+            return;
+        }
+        cam.day = day;
+        cam.phase = Phase::Open { start };
+        cam.event_id = Some(id);
+        cam.close_ok = false;
+        cam.reviewed = false;
+        cam.recorded = true;
+        cam.retry_at = DateTime::UNIX_EPOCH;
+        cam.tried_open = true;
+    }
+
+    /// `already_fed` is true when this camera already has a finished feed event today.
+    /// `open_secs` is how long the feeder stays on. Zero never starts a feed, but an
+    /// interval that is already open still closes.
     pub fn step(&mut self, camera: &str, now: DateTime<Utc>, already_fed: bool, open_secs: u64) -> Step {
-        if open_secs == 0 {
+        if open_secs == 0 && !self.is_open(camera) {
             return Step::None;
         }
         let day = now.date_naive();
-        let cam = self.cameras.entry(camera.to_string()).or_insert(Cam {
-            day,
-            phase: Phase::Wait,
-            tried_open: false,
-            retry_at: DateTime::UNIX_EPOCH,
-        });
-        if cam.day != day {
-            let prev = std::mem::replace(&mut cam.phase, Phase::Wait);
-            cam.day = day;
-            cam.tried_open = false;
-            cam.retry_at = DateTime::UNIX_EPOCH;
-            if let Phase::Open { start } = prev {
-                return Step::Close { start };
-            }
+        let cam = self
+            .cameras
+            .entry(camera.to_string())
+            .or_insert_with(|| Cam::fresh(day));
+        if cam.day != day && !matches!(cam.phase, Phase::Open { .. }) {
+            *cam = Cam::fresh(day);
         }
 
         match cam.phase {
             Phase::Done => Step::None,
             Phase::Wait => {
-                if already_fed || now.hour() > WINDOW_HOUR {
+                if open_secs == 0 || already_fed {
                     cam.phase = Phase::Done;
-                    return if cam.tried_open { Step::GiveUp } else { Step::None };
+                    return Step::None;
+                }
+                if now.hour() > WINDOW_HOUR {
+                    if cam.tried_open && !cam.recorded {
+                        if now < cam.retry_at {
+                            return Step::None;
+                        }
+                        cam.retry_at = now + chrono::Duration::seconds(30);
+                        return Step::GiveUp;
+                    }
+                    cam.phase = Phase::Done;
+                    return Step::None;
                 }
                 if now.hour() != WINDOW_HOUR || now < cam.retry_at {
                     return Step::None;
                 }
                 cam.phase = Phase::Open { start: now };
+                cam.retry_at = DateTime::UNIX_EPOCH;
+                cam.close_ok = false;
+                cam.reviewed = false;
                 Step::Open
             }
             Phase::Open { start } => {
                 let elapsed = now.signed_duration_since(start).num_seconds();
-                if now.hour() != WINDOW_HOUR || elapsed >= open_secs as i64 {
+                let due = open_secs == 0 || now.hour() != WINDOW_HOUR || elapsed >= open_secs as i64;
+                if !due {
+                    return Step::None;
+                }
+                if cam.close_ok && cam.reviewed {
                     cam.phase = Phase::Done;
-                    Step::Close { start }
-                } else {
-                    Step::None
+                    return Step::None;
+                }
+                if !cam.close_ok && now < cam.retry_at {
+                    return Step::None;
+                }
+                if !cam.close_ok {
+                    cam.retry_at = now + chrono::Duration::seconds(5);
+                }
+                Step::Close {
+                    start,
+                    write: !cam.close_ok,
+                    event_id: cam.event_id,
                 }
             }
         }
@@ -103,8 +217,15 @@ impl CameraFeeds {
             cam.phase = Phase::Wait;
             cam.tried_open = true;
             cam.retry_at = now + chrono::Duration::seconds(30);
+            cam.event_id = None;
+            cam.close_ok = false;
+            cam.reviewed = false;
         }
     }
+}
+
+pub fn unfinished(note: &Option<String>) -> bool {
+    matches!(note.as_deref(), Some(NOTE_FEEDING) | Some(NOTE_REVIEWING))
 }
 
 pub fn note_from_vlm(text: &str) -> (String, bool) {
@@ -146,6 +267,27 @@ pub fn save_event(
         return None;
     }
     Some((id, end, score))
+}
+
+/// Claim today's feed before the feeder is energized, so a crash cannot open it twice.
+pub fn claim_feed(db: &Db, cfg: &Config, camera: &str, start: DateTime<Utc>) -> Option<Uuid> {
+    let id = Uuid::new_v4();
+    let event = Event {
+        id,
+        camera: camera.to_string(),
+        label: "feed".into(),
+        score: 0.0,
+        start_time: start,
+        end_time: None,
+        snapshot_path: snapshot(cfg, camera, id),
+        clip_path: None,
+        note: Some(NOTE_FEEDING.to_string()),
+    };
+    if let Err(e) = db.insert_event(&event) {
+        warn!(error = %e, "claim feed event");
+        return None;
+    }
+    Some(id)
 }
 
 /// Cut the feed clip, ask Qwen whether food came out, and write that note on the event.
@@ -191,7 +333,12 @@ async fn wait_for_clip(cfg: &Config, camera: &str, id: Uuid, start: DateTime<Utc
     let root = cfg.recordings_dir().join(camera);
     loop {
         let files = recording_files(&root);
-        if let ClipFiles::Ready(needed) = clip_files(&files, start, end, cfg.record.segment_secs as i64) {
+        let growing = files
+            .last()
+            .is_some_and(|(_, path)| newest_still_growing(path, start));
+        if let ClipFiles::Ready(needed) =
+            clip_files(&files, start, end, cfg.record.segment_secs as i64, growing)
+        {
             if let Some(path) = cut_clip(cfg, id, &needed, start, end).await {
                 return Some(path);
             }
@@ -303,6 +450,7 @@ fn clip_files(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     segment_secs: i64,
+    newest_is_growing: bool,
 ) -> ClipFiles {
     if files.is_empty() {
         return ClipFiles::Wait;
@@ -311,9 +459,14 @@ fn clip_files(
     let mut needed = Vec::new();
     for i in 0..files.len() {
         let t = files[i].0;
-        // The newest file is still growing, so it covers the feed even when
-        // that feed runs longer than one configured segment.
-        let next = files.get(i + 1).map(|f| f.0).unwrap_or(end + span);
+        let next = if let Some(following) = files.get(i + 1) {
+            following.0
+        } else if newest_is_growing {
+            // The file ffmpeg is still writing covers the feed past one segment.
+            end + span
+        } else {
+            t + span
+        };
         if t < end && next > start {
             needed.push(files[i].clone());
         }
@@ -323,6 +476,16 @@ fn clip_files(
     } else {
         ClipFiles::Ready(needed)
     }
+}
+
+fn newest_still_growing(path: &Path, start: DateTime<Utc>) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    DateTime::<Utc>::from(modified) + chrono::Duration::seconds(2) >= start
 }
 
 fn recording_files(root: &Path) -> Vec<(DateTime<Utc>, PathBuf)> {
@@ -477,6 +640,7 @@ fn snapshot(cfg: &Config, camera: &str, id: Uuid) -> Option<String> {
     Some(dest.to_string_lossy().to_string())
 }
 
+#[cfg(test)]
 fn at(hour: u32, min: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 23, hour, min, 0).unwrap()
 }
@@ -493,8 +657,14 @@ mod tests {
         assert_eq!(feeds.step("cam1", at(7, 10), false, 3600), Step::None);
         assert_eq!(
             feeds.step("cam1", at(8, 0), false, 3600),
-            Step::Close { start: at(7, 0) }
+            Step::Close {
+                start: at(7, 0),
+                write: true,
+                event_id: None
+            }
         );
+        feeds.ack_close("cam1");
+        assert!(feeds.mark_reviewed("cam1"));
         assert_eq!(feeds.step("cam1", at(8, 10), false, 3600), Step::None);
     }
 
@@ -506,7 +676,16 @@ mod tests {
         let early = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 7).unwrap();
         assert_eq!(feeds.step("cam1", early, false, 8), Step::None);
         let due = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 8).unwrap();
-        assert_eq!(feeds.step("cam1", due, false, 8), Step::Close { start });
+        assert_eq!(
+            feeds.step("cam1", due, false, 8),
+            Step::Close {
+                start,
+                write: true,
+                event_id: None
+            }
+        );
+        feeds.ack_close("cam1");
+        assert!(feeds.mark_reviewed("cam1"));
         let later = Utc.with_ymd_and_hms(2026, 10, 23, 7, 1, 0).unwrap();
         assert_eq!(feeds.step("cam1", later, false, 8), Step::None);
     }
@@ -546,11 +725,11 @@ mod tests {
         let open = vec![(t(7, 44, 0), PathBuf::from("a.mp4"))];
         let start = t(7, 44, 30);
         let end = t(7, 44, 41);
-        match clip_files(&open, start, end, 60) {
+        match clip_files(&open, start, end, 60, true) {
             ClipFiles::Ready(got) => assert_eq!(got.len(), 1),
             ClipFiles::Wait => panic!("the open segment should be usable"),
         }
-        match clip_files(&open, t(7, 45, 10), t(7, 45, 30), 60) {
+        match clip_files(&open, t(7, 45, 10), t(7, 45, 30), 60, true) {
             ClipFiles::Ready(got) => assert_eq!(got.len(), 1),
             ClipFiles::Wait => panic!("a long open segment should still cover the feed"),
         }
@@ -558,7 +737,7 @@ mod tests {
             (t(7, 44, 0), PathBuf::from("a.mp4")),
             (t(7, 45, 0), PathBuf::from("b.mp4")),
         ];
-        match clip_files(&closed, start, end, 60) {
+        match clip_files(&closed, start, end, 60, true) {
             ClipFiles::Ready(got) => assert_eq!(got.len(), 1),
             ClipFiles::Wait => panic!("closed segment should be ready"),
         }
@@ -569,7 +748,114 @@ mod tests {
         let mut feeds = CameraFeeds::default();
         assert_eq!(feeds.step("cam1", at(7, 0), false, 3600), Step::Open);
         let _ = feeds.step("cam1", at(8, 0), false, 3600);
+        feeds.ack_close("cam1");
+        assert!(feeds.mark_reviewed("cam1"));
         let next = Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap();
         assert_eq!(feeds.step("cam1", next, false, 3600), Step::Open);
+    }
+
+    #[test]
+    fn a_failed_close_is_retried_until_it_is_acknowledged() {
+        let mut feeds = CameraFeeds::default();
+        let start = at(7, 0);
+        assert_eq!(feeds.step("cam1", start, false, 8), Step::Open);
+        let due = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 8).unwrap();
+        assert_eq!(
+            feeds.step("cam1", due, false, 8),
+            Step::Close {
+                start,
+                write: true,
+                event_id: None
+            }
+        );
+        let too_soon = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 10).unwrap();
+        assert_eq!(feeds.step("cam1", too_soon, false, 8), Step::None);
+        let retry = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 13).unwrap();
+        assert_eq!(
+            feeds.step("cam1", retry, false, 8),
+            Step::Close {
+                start,
+                write: true,
+                event_id: None
+            }
+        );
+        feeds.ack_close("cam1");
+        assert!(feeds.mark_reviewed("cam1"));
+        assert_eq!(feeds.step("cam1", retry, false, 8), Step::None);
+    }
+
+    #[test]
+    fn zero_feed_time_still_closes_a_feeder_that_is_already_open() {
+        let mut feeds = CameraFeeds::default();
+        let start = at(7, 0);
+        assert_eq!(feeds.step("cam1", start, false, 8), Step::Open);
+        assert_eq!(
+            feeds.step("cam1", start, false, 0),
+            Step::Close {
+                start,
+                write: true,
+                event_id: None
+            }
+        );
+    }
+
+    #[test]
+    fn the_next_day_does_not_open_while_yesterday_is_still_on() {
+        let mut feeds = CameraFeeds::default();
+        let start = Utc.with_ymd_and_hms(2026, 10, 23, 7, 30, 0).unwrap();
+        assert_eq!(feeds.step("cam1", start, false, 8), Step::Open);
+        let next = Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap();
+        assert_eq!(
+            feeds.step("cam1", next, false, 8),
+            Step::Close {
+                start,
+                write: true,
+                event_id: None
+            }
+        );
+        feeds.ack_close("cam1");
+        assert!(feeds.mark_reviewed("cam1"));
+        assert_eq!(feeds.step("cam1", next, false, 8), Step::Open);
+    }
+
+    #[test]
+    fn give_up_is_recorded_once() {
+        let mut feeds = CameraFeeds::default();
+        assert_eq!(feeds.step("cam1", at(7, 0), false, 8), Step::Open);
+        feeds.fail_open("cam1", at(7, 0));
+        assert_eq!(feeds.step("cam1", at(7, 0), false, 8), Step::None);
+        assert_eq!(feeds.step("cam1", at(8, 0), false, 8), Step::GiveUp);
+        assert_eq!(feeds.step("cam1", at(8, 0), false, 8), Step::None);
+        feeds.mark_give_up("cam1");
+        assert_eq!(feeds.step("cam1", at(8, 1), false, 8), Step::None);
+    }
+
+    #[test]
+    fn an_old_recording_is_not_used_as_the_feed_clip() {
+        let t = |h, m, s| Utc.with_ymd_and_hms(2026, 10, 23, h, m, s).unwrap();
+        let stale = vec![(t(6, 0, 0), PathBuf::from("old.mp4"))];
+        match clip_files(&stale, t(7, 44, 30), t(7, 44, 41), 60, false) {
+            ClipFiles::Wait => {}
+            ClipFiles::Ready(_) => panic!("a finished file from before the feed must not be cut"),
+        }
+    }
+
+    #[test]
+    fn a_restart_adopts_the_unfinished_event_instead_of_opening_again() {
+        let mut feeds = CameraFeeds::default();
+        let start = at(7, 10);
+        let id = Uuid::new_v4();
+        feeds.adopt("cam1", start, id);
+        let during = Utc.with_ymd_and_hms(2026, 10, 23, 7, 10, 3).unwrap();
+        assert_eq!(feeds.step("cam1", during, false, 8), Step::None);
+        let due = Utc.with_ymd_and_hms(2026, 10, 23, 7, 10, 8).unwrap();
+        assert_eq!(
+            feeds.step("cam1", due, false, 8),
+            Step::Close {
+                start,
+                write: true,
+                event_id: Some(id)
+            }
+        );
     }
 }

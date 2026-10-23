@@ -187,14 +187,23 @@ impl Db {
         Ok(())
     }
 
-    pub fn has_feed_event(&self, camera: &str, day: chrono::NaiveDate) -> Result<bool> {
+    pub fn latest_feed_event(&self, camera: &str, day: chrono::NaiveDate) -> Result<Option<Event>> {
         let conn = self.lock()?;
-        let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM events WHERE camera = ?1 AND label = 'feed' AND start_time LIKE ?2",
-            params![camera, format!("{day}%")],
-            |row| row.get(0),
+        let mut stmt = conn.prepare(
+            "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note
+             FROM events WHERE camera = ?1 AND label = 'feed' AND start_time LIKE ?2
+             ORDER BY start_time DESC LIMIT 1",
         )?;
-        Ok(n > 0)
+        let ev = stmt
+            .query_row(params![camera, format!("{day}%")], map_event)
+            .optional()?;
+        Ok(ev)
+    }
+
+    pub fn delete_event(&self, id: Uuid) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM events WHERE id = ?1", params![id.to_string()])?;
+        Ok(())
     }
 
     pub fn list_events(&self, camera: Option<&str>, limit: i64) -> Result<Vec<Event>> {

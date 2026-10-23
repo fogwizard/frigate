@@ -354,6 +354,13 @@ pub async fn feeding(
         ));
     }
     let slave = slave.unwrap_or(0);
+    let open_for = st
+        .cfg
+        .cameras
+        .get(&body.camera)
+        .map(|c| c.feed_time)
+        .unwrap_or(0);
+    let close_later = feed.clone();
     tokio::task::spawn_blocking(move || {
         vigil_modbus::write_feed(
             &feed.port,
@@ -367,6 +374,28 @@ pub async fn feeding(
     .await
     .map_err(AppError::internal)?
     .map_err(AppError::internal)?;
+    if close_later.serial_enabled() {
+        let camera = body.camera.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(open_for)).await;
+            let closed = tokio::task::spawn_blocking(move || {
+                vigil_modbus::write_feed(
+                    &close_later.port,
+                    close_later.baud,
+                    slave,
+                    close_later.function,
+                    close_later.address,
+                    close_later.close_value,
+                )
+            })
+            .await;
+            match closed {
+                Ok(Ok(())) => tracing::info!(%camera, "manual feeder closed"),
+                Ok(Err(e)) => tracing::warn!(%camera, error = %e, "manual feeder close failed"),
+                Err(e) => tracing::warn!(%camera, error = %e, "manual feeder close failed"),
+            }
+        });
+    }
     tracing::info!(camera = %body.camera, slave, "feed command finished");
     Ok(Json(json!({ "success": true, "status": "accepted" })))
 }
