@@ -119,8 +119,10 @@ impl InferClient {
         }
 
         if self.try_connect_once().await.is_ok() {
+            info!(endpoint = %self.cfg.infer.endpoint, "vigil-infer already listening");
             return Ok(());
         }
+        info!(endpoint = %self.cfg.infer.endpoint, "vigil-infer not listening, starting it");
 
         {
             let mut child_guard = self.child.lock().await;
@@ -168,6 +170,9 @@ impl InferClient {
 
         let bin = resolve_sidecar_bin(&self.cfg.infer.binary);
         let mut cmd = Command::new(&bin);
+        if let Ok(cwd) = std::env::current_dir() {
+            cmd.current_dir(cwd);
+        }
         cmd.args([
             "--endpoint",
             endpoint,

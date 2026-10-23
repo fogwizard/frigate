@@ -64,6 +64,14 @@ async function loadLive() {
         card.querySelector("img").classList.add("dead");
         mark(true);
       });
+      const stayLive = () => {
+        if (!video.buffered || !video.buffered.length) return;
+        const end = video.buffered.end(video.buffered.length - 1);
+        const lag = end - video.currentTime;
+        if (lag > 0.4 && Number.isFinite(lag)) video.currentTime = Math.max(0, end - 0.15);
+      };
+      video.addEventListener("progress", stayLive);
+      setInterval(stayLive, 250);
       video.addEventListener("error", () => {
         video.style.display = "none";
         mark(false);

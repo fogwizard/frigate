@@ -30,6 +30,9 @@ pub struct Config {
     /// HTTP-FLV playback for WeChat mini-program (go2rtc + signed URLs).
     #[serde(default)]
     pub stream: StreamConfig,
+    /// Local go2rtc process. Started at daemon boot when its API port is closed.
+    #[serde(default)]
+    pub go2rtc: Go2rtcConfig,
     /// WeChat mini-program login / boarding / device APIs.
     #[serde(default)]
     pub miniprogram: MiniprogramConfig,
@@ -539,6 +542,39 @@ impl Default for StreamConfig {
             play_url_template: default_stream_play_url(),
             sign_secret: default_stream_sign_secret(),
             sign_ttl_secs: default_stream_sign_ttl(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Go2rtcConfig {
+    /// Executable. Absolute path, or a name on PATH.
+    #[serde(default = "default_go2rtc_binary")]
+    pub binary: String,
+    /// Config file, relative to the process working directory (the project root).
+    #[serde(default = "default_go2rtc_config")]
+    pub config: String,
+    /// API address used to decide whether a process is already up.
+    #[serde(default = "default_go2rtc_api")]
+    pub api: String,
+}
+
+fn default_go2rtc_binary() -> String {
+    "go2rtc".into()
+}
+fn default_go2rtc_config() -> String {
+    "packaging/go2rtc.yaml".into()
+}
+fn default_go2rtc_api() -> String {
+    "127.0.0.1:1984".into()
+}
+
+impl Default for Go2rtcConfig {
+    fn default() -> Self {
+        Self {
+            binary: default_go2rtc_binary(),
+            config: default_go2rtc_config(),
+            api: default_go2rtc_api(),
         }
     }
 }

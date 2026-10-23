@@ -4,6 +4,7 @@ mod ctl;
 mod db;
 mod detect;
 mod events;
+mod go2rtc;
 mod infer_client;
 mod ingest;
 mod mp_api;
@@ -109,13 +110,19 @@ async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
         let cams: Vec<String> = cfg.cameras.keys().cloned().collect();
         db.seed_miniprogram_demo(&cams)?;
     }
+    let cwd = std::env::current_dir().context("current directory")?;
+    info!(dir = %cwd.display(), "workspace");
+    go2rtc::ensure(&cfg, &cwd).await.context("start go2rtc")?;
+
     let infer = Arc::new(infer_client::InferClient::new(cfg.clone())?);
+    infer.ensure_running().await.context("start vigil-infer")?;
     let infer_flag = infer.connected_flag();
     let events = Arc::new(events::EventEngine::new(cfg.clone(), db.clone()));
 
     let cam_names: Vec<String> = cfg.cameras.keys().cloned().collect();
     let statuses = detect::new_status_map(&cam_names);
 
+    tokio::spawn(go2rtc::supervise(cfg.clone(), cwd));
     tokio::spawn(infer.clone().supervise());
 
     {

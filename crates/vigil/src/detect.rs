@@ -68,7 +68,15 @@ async fn detect_worker(
 ) {
     let mut idle = IdleProbe::default();
     let mut empty_streak: HashMap<String, u32> = HashMap::new();
-    while let Some(job) = rx.recv().await {
+    while let Some(mut job) = rx.recv().await {
+        let mut skipped = 0u32;
+        while let Ok(newer) = rx.try_recv() {
+            job = newer;
+            skipped += 1;
+        }
+        if skipped > 0 {
+            debug!(camera = %job.camera, skipped, "dropped stale detect frames");
+        }
         let tracking = camera_has_objects(&statuses, &job.camera).await;
         if cfg.detect.motion && !job.moved && !tracking && !idle.due(&job.camera, Duration::from_secs(5)) {
             debug!(camera = %job.camera, "skip inference, scene still");

@@ -7,7 +7,9 @@ use crate::record;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -205,8 +207,16 @@ fn push_dahua_rtsp_input_args(args: &mut Vec<String>, source: &str) {
 fn push_usb_input_args(args: &mut Vec<String>, usb: &UsbConfig) {
     let backend = usb.resolved_backend();
     if backend == "dshow" {
-        // Large buffer avoids dshow "real-time buffer too full" / I/O errors under load.
-        args.extend(["-rtbufsize".into(), "100M".into()]);
+        // A 100MB queue held ~10s of frames, so the live picture lagged behind the room.
+        // ~1s is enough to ride out a short encode stall without showing an old hand.
+        args.extend([
+            "-fflags".into(),
+            "nobuffer".into(),
+            "-flags".into(),
+            "low_delay".into(),
+            "-rtbufsize".into(),
+            "8M".into(),
+        ]);
     }
     args.push("-f".into());
     args.push(backend.into());
@@ -347,6 +357,10 @@ async fn spawn_combined_ffmpeg(
                 "ultrafast".into(),
                 "-tune".into(),
                 "zerolatency".into(),
+                "-bf".into(),
+                "0".into(),
+                "-g".into(),
+                "15".into(),
                 "-pix_fmt".into(),
                 "yuv420p".into(),
             ]);
@@ -354,6 +368,10 @@ async fn spawn_combined_ffmpeg(
             args.extend(["-c".into(), "copy".into()]);
         }
         args.extend([
+            "-muxdelay".into(),
+            "0".into(),
+            "-muxpreload".into(),
+            "0".into(),
             "-f".into(),
             "rtsp".into(),
             "-rtsp_transport".into(),
@@ -387,6 +405,8 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
     let frame_len = cfg.detect.frame_bytes();
     let mut reader = BufReader::with_capacity(frame_len * 2, reader);
     let mut motion = crate::detect::MotionSampler::default();
+    let jpeg_busy = Arc::new(AtomicBool::new(false));
+    let mut last_jpeg = Instant::now() - Duration::from_secs(1);
 
     loop {
         let mut slot_w = match ring.begin_write(&camera, width, height, FORMAT_RGB8, frame_len) {
@@ -401,10 +421,20 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
             return Err(e.into());
         }
 
-        // Live preview: encode every detect frame (500ms throttle made the UI stutter).
-        if let Some(jpeg) = rgb_to_jpeg(slot_w.payload(), width, height, 70) {
-            let live_path = live_dir.join(format!("{camera}.jpg"));
-            let _ = std::fs::write(&live_path, jpeg);
+        // JPEG is only the fallback preview. Encoding it inline stalled the raw pipe,
+        // which stalled the go2rtc restream on the same FFmpeg process.
+        if last_jpeg.elapsed() >= Duration::from_millis(200) && !jpeg_busy.load(Ordering::Relaxed) {
+            last_jpeg = Instant::now();
+            let rgb = slot_w.payload().to_vec();
+            let path = live_dir.join(format!("{camera}.jpg"));
+            let busy = jpeg_busy.clone();
+            busy.store(true, Ordering::Relaxed);
+            tokio::task::spawn_blocking(move || {
+                if let Some(jpeg) = rgb_to_jpeg(&rgb, width, height, 70) {
+                    let _ = std::fs::write(&path, jpeg);
+                }
+                busy.store(false, Ordering::Relaxed);
+            });
         }
 
         let moved = if cfg.detect.motion {
@@ -487,8 +517,12 @@ mod tests {
         assert_eq!(
             args,
             vec![
+                "-fflags",
+                "nobuffer",
+                "-flags",
+                "low_delay",
                 "-rtbufsize",
-                "100M",
+                "8M",
                 "-f",
                 "dshow",
                 "-pixel_format",

@@ -47,7 +47,7 @@ usb:
   height: 480
   fps: 15
   backend: dshow
-  # go2rtc 未启动时务必保持 false，否则整路 FFmpeg 会退出、无画面
+  # 推到 go2rtc。vigil 启动时会先把 go2rtc 拉起来。
   restream: true
   # true = 只开 USB 这一路，跳过其它占位 RTSP
   only: true
@@ -107,9 +107,15 @@ web:
 # WeChat mini-program HTTP-FLV (go2rtc + Nginx).
 # Restream: Vigil FFmpeg publishes RTSP to go2rtc; go2rtc serves real HTTP-FLV for live-player.
 # See packaging/go2rtc.yaml and packaging/nginx-flv.conf.example
+# 本机能找到 go2rtc 就拉起；找不到则打印远程启动命令，由另一台机器执行。工作目录是项目根目录。
+go2rtc:
+  binary: "C:/Users/jwi4szh/Desktop/prog/adb/go2rtc.exe"
+  config: packaging/go2rtc.yaml
+  api: "127.0.0.1:1984"
+
 stream:
   enabled: true
-  # 需要先启动 go2rtc（:8554）再设 true；否则 FFmpeg 会因推流失败退出
+  # 推流到本机 go2rtc。进程没起来时由上面的 go2rtc 段自动启动。
   restream: false
   # Must match go2rtc rtsp.listen + stream name (publisher)
   publish_url_template: "rtsp://127.0.0.1:8554/{camera}"
