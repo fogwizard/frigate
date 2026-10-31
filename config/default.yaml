@@ -23,7 +23,7 @@ openvino:
 
 ffmpeg:
   # 改成你的 ffmpeg 路径；须能拉到下方 cameras 的 RTSP 才有画面
-  binary: "C:/Users/jwi4szh/Desktop/prog/ffmpeg-2022-11-03-git-5ccd4d3060-full_build/bin/ffmpeg.exe"
+  binary: "D:/adb/ffmpeg/bin/ffmpeg.exe"
 
 infer:
   # Linux production: /run/vigil/infer.sock
@@ -40,7 +40,7 @@ infer:
 # Windows 列设备: ffmpeg -list_devices true -f dshow -i dummy
 # Linux 列设备:   ls /dev/video*  或  v4l2-ctl --list-devices
 usb:
-  enabled: true
+  enabled: false
   device: "HP 5MP Camera"
   camera: cam1
   width: 640
@@ -50,47 +50,41 @@ usb:
   # 推到 go2rtc。vigil 启动时会先把 go2rtc 拉起来。
   restream: true
   # true = 只开 USB 这一路，跳过其它占位 RTSP
-  only: true
+  only: false
 
 # 大华 IPC / NVR。channel 从 1 开始；subtype=0 主码流（常见 H.265），subtype=1 子码流（常见 H.264）。
 # 本进程一路 FFmpeg 同时录像、检测、推 go2rtc，请用 H.264 的子码流，微信 live-player 才能 -c copy 播放。
 # 密码里的 @ : # & 空格要百分号编码。整段 URL 会作为单个参数传给 FFmpeg，& 不会被拆开。
-# 示例：rtsp://admin:密码@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1
+# 四台独立 IPC，每台 channel=1。subtype=1 为子码流。
+# 示例：rtsp://admin:密码@192.168.1.5:554/cam/realmonitor?channel=1&subtype=1
 cameras:
   cam1:
     feed_slave: 1
     feed_time: 8          # 秒。0 表示这路不喂食
     ffmpeg:
       inputs:
-        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=1&subtype=1
+        - path: rtsp://admin:jwf6061120@192.168.1.5:554/cam/realmonitor?channel=1&subtype=0
           roles: [record, detect]
   cam2:
     feed_slave: 2
     feed_time: 8
     ffmpeg:
       inputs:
-        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=2&subtype=1
+        - path: rtsp://admin:jwf6061120@192.168.1.7:554/cam/realmonitor?channel=1&subtype=0
           roles: [record, detect]
   cam3:
     feed_slave: 3
     feed_time: 8
     ffmpeg:
       inputs:
-        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=3&subtype=1
+        - path: rtsp://admin:jwf6061120@192.168.1.3:554/cam/realmonitor?channel=1&subtype=0
           roles: [record, detect]
   cam4:
     feed_slave: 4
     feed_time: 8
     ffmpeg:
       inputs:
-        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=4&subtype=1
-          roles: [record, detect]
-  cam5:
-    feed_slave: 5
-    feed_time: 8
-    ffmpeg:
-      inputs:
-        - path: rtsp://admin:password@192.168.1.108:554/cam/realmonitor?channel=5&subtype=1
+        - path: rtsp://admin:jwf6061120@192.168.1.19:554/cam/realmonitor?channel=1&subtype=0
           roles: [record, detect]
 
 record:
@@ -114,14 +108,14 @@ web:
 # See packaging/go2rtc.yaml and packaging/nginx-flv.conf.example
 # 本机能找到 go2rtc 就拉起；找不到则打印远程启动命令，由另一台机器执行。工作目录是项目根目录。
 go2rtc:
-  binary: "C:/Users/jwi4szh/Desktop/prog/adb/go2rtc.exe"
+  binary: "D:/adb/go2rtc.exe"
   config: packaging/go2rtc.yaml
   api: "127.0.0.1:1984"
 
 stream:
   enabled: true
   # 推流到本机 go2rtc。进程没起来时由上面的 go2rtc 段自动启动。
-  restream: false
+  restream: true
   # Must match go2rtc rtsp.listen + stream name (publisher)
   publish_url_template: "rtsp://127.0.0.1:8554/{camera}"
   # Nginx maps /{camera}.flv → go2rtc /api/stream.flv?src={camera}

@@ -27,6 +27,24 @@ async function refreshHealth() {
   }
 }
 
+function setSignal(card, ok) {
+  const meta = card.querySelector(".meta");
+  if (!meta) return;
+  meta.textContent = ok ? "live" : "无信号";
+  meta.classList.toggle("nosignal", !ok);
+}
+
+function videoShowing(video) {
+  return !!(
+    video &&
+    video.style.display !== "none" &&
+    video.videoWidth > 0 &&
+    video.readyState >= 2 &&
+    !video.paused &&
+    !video.ended
+  );
+}
+
 async function loadLive() {
   const grid = $("#live-grid");
   try {
@@ -53,18 +71,14 @@ async function loadLive() {
       .join("");
     grid.querySelectorAll("video").forEach((video) => {
       const card = video.closest(".card");
-      const mark = (ok) => {
-        const meta = card.querySelector(".meta");
-        if (!meta) return;
-        meta.textContent = ok ? "live" : "无信号";
-        meta.classList.toggle("nosignal", !ok);
-      };
-      video.addEventListener("playing", () => {
+      const showLive = () => {
         video.style.display = "block";
         card.querySelector("img").classList.add("dead");
-        mark(true);
-      });
+        setSignal(card, true);
+      };
+      video.addEventListener("playing", showLive);
       const stayLive = () => {
+        if (videoShowing(video)) setSignal(card, true);
         if (!video.buffered || !video.buffered.length) return;
         const end = video.buffered.end(video.buffered.length - 1);
         const lag = end - video.currentTime;
@@ -73,9 +87,16 @@ async function loadLive() {
       video.addEventListener("progress", stayLive);
       setInterval(stayLive, 250);
       video.addEventListener("error", () => {
+        if (videoShowing(video)) {
+          setSignal(card, true);
+          return;
+        }
         video.style.display = "none";
-        mark(false);
+        const img = card.querySelector("img");
+        if (img && !img.classList.contains("dead") && img.naturalWidth > 0) return;
+        setSignal(card, false);
       });
+      if (videoShowing(video)) showLive();
     });
   } catch (e) {
     grid.innerHTML = `<div class="empty">加载失败: ${e}</div>`;
@@ -85,7 +106,10 @@ async function loadLive() {
 function refreshSnapshots() {
   document.querySelectorAll("#live-grid .card").forEach((card) => {
     const video = card.querySelector("video");
-    if (video && video.style.display !== "none" && !video.paused && video.readyState >= 2) return;
+    if (videoShowing(video)) {
+      setSignal(card, true);
+      return;
+    }
     const img = card.querySelector("img");
     if (!img) return;
     const cam = card.dataset.cam;
@@ -93,20 +117,13 @@ function refreshSnapshots() {
     next.onload = () => {
       img.src = next.src;
       img.classList.remove("dead");
-      const meta = card.querySelector(".meta");
-      if (meta && (!video || video.style.display === "none")) {
-        meta.textContent = "live";
-        meta.classList.remove("nosignal");
-      }
+      setSignal(card, true);
     };
     next.onerror = () => {
-      if (video && video.style.display !== "none") return;
+      if (videoShowing(video)) return;
+      if (img.naturalWidth > 0 && !img.classList.contains("dead")) return;
       img.classList.add("dead");
-      const meta = card.querySelector(".meta");
-      if (meta) {
-        meta.textContent = "无信号";
-        meta.classList.add("nosignal");
-      }
+      setSignal(card, false);
     };
     next.src = `/api/snapshots/${encodeURIComponent(cam)}?t=${Date.now()}`;
   });

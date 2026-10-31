@@ -437,7 +437,12 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
             busy.store(true, Ordering::Relaxed);
             tokio::task::spawn_blocking(move || {
                 if let Some(jpeg) = rgb_to_jpeg(&rgb, width, height, 70) {
-                    let _ = std::fs::write(&path, jpeg);
+                    // Write aside, then replace. Truncating cam.jpg in place lets the
+                    // browser read a partial file and treat the preview as failed.
+                    let tmp = path.with_extension("jpg.tmp");
+                    if std::fs::write(&tmp, jpeg).is_ok() {
+                        let _ = std::fs::rename(&tmp, &path);
+                    }
                 }
                 busy.store(false, Ordering::Relaxed);
             });
