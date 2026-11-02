@@ -93,6 +93,14 @@ h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.35rem; }
   cursor: default;
 }
 .pager span { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+.pager select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+}
 .hint { color: var(--muted); margin: 0 0 1rem; font-size: 0.9rem; }
 
 .grid {

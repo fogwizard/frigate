@@ -19,7 +19,41 @@ function ensurePager(id, newerId, rangeId, olderId) {
 }
 
 function ensureEventsPager() {
-  return ensurePager("events-pager", "events-newer", "events-range", "events-older");
+  const bar = ensurePager("events-pager", "events-newer", "events-range", "events-older");
+  if (bar && !$("#events-camera")) {
+    const select = document.createElement("select");
+    select.id = "events-camera";
+    select.setAttribute("aria-label", "摄像头");
+    select.innerHTML = '<option value="">全部</option>';
+    bar.prepend(select);
+  }
+  return bar;
+}
+
+function eventCamera() {
+  return $("#events-camera")?.value || "";
+}
+
+function cameraOption(name) {
+  const text = String(name).replace(/[&<>"']/g, (ch) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch])
+  );
+  return `<option value="${text}">${text}</option>`;
+}
+
+async function fillEventCameras() {
+  const select = $("#events-camera");
+  if (!select) return;
+  const chosen = select.value;
+  let names = [];
+  try {
+    const r = await fetch("/api/cameras");
+    if (r.ok) names = (await r.json()).cameras || [];
+  } catch {
+    names = [];
+  }
+  select.innerHTML = names.map(cameraOption).join("") + '<option value="">全部</option>';
+  select.value = names.includes(chosen) ? chosen : "";
 }
 
 function ensureRecordingsPager() {
@@ -260,7 +294,9 @@ function setEventsPager(total, shown) {
 async function loadEvents() {
   const list = $("#events-list");
   try {
-    const r = await fetch(`/api/events?limit=${EVENTS_PAGE}&offset=${eventsOffset}`);
+    const camera = eventCamera();
+    const cameraQuery = camera ? `&camera=${encodeURIComponent(camera)}` : "";
+    const r = await fetch(`/api/events?limit=${EVENTS_PAGE}&offset=${eventsOffset}${cameraQuery}`);
     const j = await r.json();
     const events = j.events || [];
     const total = Number.isFinite(Number(j.total)) ? Number(j.total) : eventsOffset + events.length;
@@ -341,6 +377,11 @@ async function loadRecordings() {
 
 ensureEventsPager();
 ensureRecordingsPager();
+fillEventCameras();
+$("#events-camera")?.addEventListener("change", () => {
+  eventsOffset = 0;
+  loadEvents();
+});
 document.addEventListener("click", (ev) => {
   const eventsNewer = ev.target.closest("#events-newer");
   const eventsOlder = ev.target.closest("#events-older");
