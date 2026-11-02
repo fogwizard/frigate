@@ -141,7 +141,7 @@ enum FeedSeen {
 }
 
 fn feed_seen(db: &crate::db::Db, camera: &str, now: chrono::DateTime<Utc>) -> anyhow::Result<FeedSeen> {
-    let today = now.date_naive();
+    let today = crate::feed::local_date(now);
     if let Some(ev) = db.latest_feed_event(camera, today)? {
         return Ok(if crate::feed::unfinished(&ev.note) {
             FeedSeen::Busy(ev)
@@ -171,7 +171,8 @@ async fn feed_loop(cfg: Arc<Config>, db: Arc<crate::db::Db>) {
     loop {
         interval.tick().await;
         let now = Utc::now();
-        fed_today.retain(|(day, _), _| *day == now.date_naive());
+        let day = crate::feed::local_date(now);
+        fed_today.retain(|(seen, _), _| *seen == day);
         let cameras: Vec<String> = cfg.cameras.keys().cloned().collect();
         for camera in cameras {
             tick_feed(
@@ -251,7 +252,7 @@ async fn tick_feed(
     };
 
     let now = Utc::now();
-    let key = (now.date_naive(), camera.to_string());
+    let key = (crate::feed::local_date(now), camera.to_string());
     let already = if fed_today.get(&key) == Some(&true) {
         true
     } else {
@@ -330,7 +331,7 @@ async fn tick_feed(
             let end = Utc::now();
             let _ = db.update_event_note(id, NOTE_REVIEWING, 0.0);
             let _ = db.update_event_end(id, end, None, 0.0);
-            fed_today.insert((start.date_naive(), camera.to_string()), true);
+            fed_today.insert((crate::feed::local_date(start), camera.to_string()), true);
             tracing::info!(%camera, "feed event recorded");
             let db = db.clone();
             let cfg = cfg.clone();
@@ -461,6 +462,61 @@ mod tests {
             *px = 220;
         }
         assert!(sampler.moved("cam1", &moved, 16, 16, 0.02));
+    }
+
+    #[test]
+    fn yesterdays_finished_feed_does_not_count_as_this_morning() {
+        use chrono::{Local, TimeZone};
+        use uuid::Uuid;
+
+        let path = std::env::temp_dir().join(format!("vigil-feed-seen-{}.db", Uuid::new_v4()));
+        let db = crate::db::Db::open(&path).unwrap();
+        let yesterday = Local
+            .with_ymd_and_hms(2026, 11, 2, 8, 0, 23)
+            .unwrap()
+            .with_timezone(&Utc);
+        let this_morning = Local
+            .with_ymd_and_hms(2026, 11, 3, 7, 12, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+        db.insert_event(&vigil_common::Event {
+            id: Uuid::new_v4(),
+            camera: "cam1".into(),
+            label: "feed".into(),
+            score: 0.0,
+            start_time: yesterday,
+            end_time: Some(yesterday),
+            snapshot_path: None,
+            clip_path: None,
+            note: Some("失败：开启喂食器失败".into()),
+        })
+        .unwrap();
+        assert!(matches!(
+            feed_seen(&db, "cam1", this_morning).unwrap(),
+            FeedSeen::None
+        ));
+
+        let started = Local
+            .with_ymd_and_hms(2026, 11, 3, 7, 10, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+        db.insert_event(&vigil_common::Event {
+            id: Uuid::new_v4(),
+            camera: "cam1".into(),
+            label: "feed".into(),
+            score: 0.0,
+            start_time: started,
+            end_time: Some(started),
+            snapshot_path: None,
+            clip_path: None,
+            note: Some("失败：开启喂食器失败".into()),
+        })
+        .unwrap();
+        assert!(matches!(
+            feed_seen(&db, "cam1", this_morning).unwrap(),
+            FeedSeen::Done
+        ));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

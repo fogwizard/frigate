@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -209,15 +209,20 @@ impl Db {
         Ok(())
     }
 
-    pub fn latest_feed_event(&self, camera: &str, day: chrono::NaiveDate) -> Result<Option<Event>> {
+    /// `day` is the machine-local calendar date. A 07:00 feed in UTC+8 is stored
+    /// as 23:00 on the previous UTC date, so a UTC-date prefix would also match
+    /// yesterday's 08:00 result and skip today's feed.
+    pub fn latest_feed_event(&self, camera: &str, day: NaiveDate) -> Result<Option<Event>> {
         let conn = self.lock()?;
+        let (start, end) = local_day_utc_bounds(day);
         let mut stmt = conn.prepare(
             "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note
-             FROM events WHERE camera = ?1 AND label = 'feed' AND start_time LIKE ?2
+             FROM events WHERE camera = ?1 AND label = 'feed'
+               AND start_time >= ?2 AND start_time < ?3
              ORDER BY start_time DESC LIMIT 1",
         )?;
         let ev = stmt
-            .query_row(params![camera, format!("{day}%")], map_event)
+            .query_row(params![camera, start, end], map_event)
             .optional()?;
         Ok(ev)
     }
@@ -378,4 +383,23 @@ fn parse_dt(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|d| d.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())
+}
+
+/// Local midnight through the next local midnight, as RFC3339 UTC strings.
+fn local_day_utc_bounds(day: NaiveDate) -> (String, String) {
+    let start = local_midnight_utc(day);
+    let end = day
+        .succ_opt()
+        .map(local_midnight_utc)
+        .unwrap_or_else(|| start + chrono::Duration::days(1));
+    (start.to_rfc3339(), end.to_rfc3339())
+}
+
+fn local_midnight_utc(day: NaiveDate) -> DateTime<Utc> {
+    let naive = day.and_hms_opt(0, 0, 0).expect("midnight");
+    chrono::Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or_else(|| Utc.from_utc_datetime(&naive))
 }
