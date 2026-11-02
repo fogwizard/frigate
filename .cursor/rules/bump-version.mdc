@@ -1,0 +1,18 @@
+---
+description: Bump the Vigil version on every code change
+alwaysApply: true
+---
+
+# Version bump
+
+The product version is `[workspace.package] version` in `Cargo.toml`. The web health badge shows it as `v` plus `CARGO_PKG_VERSION`.
+
+When a task changes project code, increase that patch number once before finishing (`0.1.1` → `0.1.2`). One bump per requested change, not once per file. Do not bump for a read-only answer.
+
+A running `vigil.exe` keeps the version it was built with. After a bump, rebuild and restart so the badge matches.
+
+After the version number changes, create a git commit with exactly this message, substituting the new number:
+
+`update to vertsion X.Y.Z`
+
+Do not push unless the user asks.

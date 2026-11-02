@@ -69,6 +69,30 @@ main { padding: 1.25rem 1.5rem 2.5rem; max-width: 1400px; margin: 0 auto; }
 .page { display: none; }
 .page.active { display: block; }
 h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.35rem; }
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: none;
+}
+.pager[hidden] { display: none; }
+.pager button {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #04140c;
+  padding: 0.4rem 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+.pager button:disabled {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
+.pager span { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
 .hint { color: var(--muted); margin: 0 0 1rem; font-size: 0.9rem; }
 
 .grid {

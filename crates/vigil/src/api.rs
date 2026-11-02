@@ -3,7 +3,7 @@ use crate::detect::CameraStatusMap;
 use crate::stream_sign::{self, AuthFail};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use vigil_common::{Config, HealthStatus, StatusResponse};
 
@@ -59,6 +60,10 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
         .fallback_service(ServeDir::new(web_dir).append_index_html_on_directories(true))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
         .with_state(state)
 }
 
@@ -166,6 +171,7 @@ async fn cameras(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
 struct ListQuery {
     camera: Option<String>,
     limit: Option<i64>,
+    offset: Option<i64>,
     after: Option<DateTime<Utc>>,
     before: Option<DateTime<Utc>>,
 }
@@ -175,11 +181,21 @@ async fn events(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let total = st
+        .db
+        .count_events(q.camera.as_deref())
+        .map_err(AppError::internal)?;
     let rows = st
         .db
-        .list_events(q.camera.as_deref(), limit)
+        .list_events(q.camera.as_deref(), limit, offset)
         .map_err(AppError::internal)?;
-    Ok(Json(serde_json::json!({ "events": rows })))
+    Ok(Json(serde_json::json!({
+        "events": rows,
+        "total": total,
+        "offset": offset,
+        "limit": limit
+    })))
 }
 
 async fn event_one(
@@ -303,12 +319,22 @@ async fn recordings(
     State(st): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let limit = q.limit.unwrap_or(100).clamp(1, 1000);
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let total = st
+        .db
+        .count_segments(q.camera.as_deref(), q.after, q.before)
+        .map_err(AppError::internal)?;
     let rows = st
         .db
-        .list_segments(q.camera.as_deref(), q.after, q.before, limit)
+        .list_segments(q.camera.as_deref(), q.after, q.before, limit, offset)
         .map_err(AppError::internal)?;
-    Ok(Json(serde_json::json!({ "recordings": rows })))
+    Ok(Json(serde_json::json!({
+        "recordings": rows,
+        "total": total,
+        "offset": offset,
+        "limit": limit
+    })))
 }
 
 async fn snapshot(

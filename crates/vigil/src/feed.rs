@@ -1,12 +1,12 @@
 //! Daily feed for each camera.
 //!
-//! UTC 07:00–08:00 opens the feeder once for that camera's `feed_time`, then
+//! Local 07:00–08:00 opens the feeder once for that camera's `feed_time`, then
 //! closes it. The clip of that interval is sent to a Qwen vision model, which
-//! decides whether food came out. After 08:00 this UTC day does not try again.
+//! decides whether food came out. After 08:00 local time that day does not try again.
 //! Closing is retried until the write succeeds, including after a restart.
 
 use crate::db::Db;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,6 +16,17 @@ use uuid::Uuid;
 use vigil_common::{Config, Event};
 
 const WINDOW_HOUR: u32 = 7;
+
+/// Hour of the machine's local clock. The feed window is 07:00–08:00 there.
+pub fn local_hour(now: DateTime<Utc>) -> u32 {
+    now.with_timezone(&Local).hour()
+}
+
+/// Calendar date of the machine's local clock. The UTC date changes at 08:00
+/// in UTC+8, which is still the same local morning.
+pub fn local_date(now: DateTime<Utc>) -> NaiveDate {
+    now.with_timezone(&Local).date_naive()
+}
 pub const NOTE_FEEDING: &str = "喂食中";
 pub const NOTE_REVIEWING: &str = "分析中";
 
@@ -122,7 +133,7 @@ impl CameraFeeds {
     /// A restart found an unfinished feed event. Keep that open interval and close it
     /// when `feed_time` has elapsed instead of opening the feeder a second time.
     pub fn adopt(&mut self, camera: &str, start: DateTime<Utc>, id: Uuid) {
-        let day = start.date_naive();
+        let day = local_date(start);
         let cam = self
             .cameras
             .entry(camera.to_string())
@@ -147,7 +158,7 @@ impl CameraFeeds {
         if open_secs == 0 && !self.is_open(camera) {
             return Step::None;
         }
-        let day = now.date_naive();
+        let day = local_date(now);
         let cam = self
             .cameras
             .entry(camera.to_string())
@@ -163,7 +174,8 @@ impl CameraFeeds {
                     cam.phase = Phase::Done;
                     return Step::None;
                 }
-                if now.hour() > WINDOW_HOUR {
+                let hour = local_hour(now);
+                if hour > WINDOW_HOUR {
                     if cam.tried_open && !cam.recorded {
                         if now < cam.retry_at {
                             return Step::None;
@@ -174,7 +186,7 @@ impl CameraFeeds {
                     cam.phase = Phase::Done;
                     return Step::None;
                 }
-                if now.hour() != WINDOW_HOUR || now < cam.retry_at {
+                if hour != WINDOW_HOUR || now < cam.retry_at {
                     return Step::None;
                 }
                 cam.phase = Phase::Open { start: now };
@@ -185,7 +197,7 @@ impl CameraFeeds {
             }
             Phase::Open { start } => {
                 let elapsed = now.signed_duration_since(start).num_seconds();
-                let due = open_secs == 0 || now.hour() != WINDOW_HOUR || elapsed >= open_secs as i64;
+                let due = open_secs == 0 || local_hour(now) != WINDOW_HOUR || elapsed >= open_secs as i64;
                 if !due {
                     return Step::None;
                 }
@@ -642,7 +654,15 @@ fn snapshot(cfg: &Config, camera: &str, id: Uuid) -> Option<String> {
 
 #[cfg(test)]
 fn at(hour: u32, min: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 10, 23, hour, min, 0).unwrap()
+    at_hms(hour, min, 0)
+}
+
+#[cfg(test)]
+fn at_hms(hour: u32, min: u32, sec: u32) -> DateTime<Utc> {
+    Local
+        .with_ymd_and_hms(2026, 10, 23, hour, min, sec)
+        .unwrap()
+        .with_timezone(&Utc)
 }
 
 #[cfg(test)]
@@ -671,11 +691,11 @@ mod tests {
     #[test]
     fn feeder_closes_after_open_secs_without_looking_at_the_picture() {
         let mut feeds = CameraFeeds::default();
-        let start = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 0).unwrap();
+        let start = at_hms(7, 0, 0);
         assert_eq!(feeds.step("cam1", start, false, 8), Step::Open);
-        let early = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 7).unwrap();
+        let early = at_hms(7, 0, 7);
         assert_eq!(feeds.step("cam1", early, false, 8), Step::None);
-        let due = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 8).unwrap();
+        let due = at_hms(7, 0, 8);
         assert_eq!(
             feeds.step("cam1", due, false, 8),
             Step::Close {
@@ -686,7 +706,7 @@ mod tests {
         );
         feeds.ack_close("cam1");
         assert!(feeds.mark_reviewed("cam1"));
-        let later = Utc.with_ymd_and_hms(2026, 10, 23, 7, 1, 0).unwrap();
+        let later = at_hms(7, 1, 0);
         assert_eq!(feeds.step("cam1", later, false, 8), Step::None);
     }
 
@@ -750,7 +770,10 @@ mod tests {
         let _ = feeds.step("cam1", at(8, 0), false, 3600);
         feeds.ack_close("cam1");
         assert!(feeds.mark_reviewed("cam1"));
-        let next = Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap();
+        let next = Local
+            .with_ymd_and_hms(2026, 10, 24, 7, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
         assert_eq!(feeds.step("cam1", next, false, 3600), Step::Open);
     }
 
@@ -759,7 +782,7 @@ mod tests {
         let mut feeds = CameraFeeds::default();
         let start = at(7, 0);
         assert_eq!(feeds.step("cam1", start, false, 8), Step::Open);
-        let due = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 8).unwrap();
+        let due = at_hms(7, 0, 8);
         assert_eq!(
             feeds.step("cam1", due, false, 8),
             Step::Close {
@@ -768,9 +791,9 @@ mod tests {
                 event_id: None
             }
         );
-        let too_soon = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 10).unwrap();
+        let too_soon = at_hms(7, 0, 10);
         assert_eq!(feeds.step("cam1", too_soon, false, 8), Step::None);
-        let retry = Utc.with_ymd_and_hms(2026, 10, 23, 7, 0, 13).unwrap();
+        let retry = at_hms(7, 0, 13);
         assert_eq!(
             feeds.step("cam1", retry, false, 8),
             Step::Close {
@@ -802,9 +825,12 @@ mod tests {
     #[test]
     fn the_next_day_does_not_open_while_yesterday_is_still_on() {
         let mut feeds = CameraFeeds::default();
-        let start = Utc.with_ymd_and_hms(2026, 10, 23, 7, 30, 0).unwrap();
+        let start = at(7, 30);
         assert_eq!(feeds.step("cam1", start, false, 8), Step::Open);
-        let next = Utc.with_ymd_and_hms(2026, 10, 24, 7, 0, 0).unwrap();
+        let next = Local
+            .with_ymd_and_hms(2026, 10, 24, 7, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
         assert_eq!(
             feeds.step("cam1", next, false, 8),
             Step::Close {
@@ -846,9 +872,9 @@ mod tests {
         let start = at(7, 10);
         let id = Uuid::new_v4();
         feeds.adopt("cam1", start, id);
-        let during = Utc.with_ymd_and_hms(2026, 10, 23, 7, 10, 3).unwrap();
+        let during = at_hms(7, 10, 3);
         assert_eq!(feeds.step("cam1", during, false, 8), Step::None);
-        let due = Utc.with_ymd_and_hms(2026, 10, 23, 7, 10, 8).unwrap();
+        let due = at_hms(7, 10, 8);
         assert_eq!(
             feeds.step("cam1", due, false, 8),
             Step::Close {

@@ -102,12 +102,33 @@ impl Db {
         Ok(row)
     }
 
+    pub fn count_segments(
+        &self,
+        camera: Option<&str>,
+        after: Option<DateTime<Utc>>,
+        before: Option<DateTime<Utc>>,
+    ) -> Result<i64> {
+        let conn = self.lock()?;
+        let after_s = after.map(|t| t.to_rfc3339());
+        let before_s = before.map(|t| t.to_rfc3339());
+        let n = conn.query_row(
+            "SELECT COUNT(*) FROM segments
+             WHERE (?1 IS NULL OR camera = ?1)
+               AND (?2 IS NULL OR start_time >= ?2)
+               AND (?3 IS NULL OR start_time <= ?3)",
+            params![camera, after_s, before_s],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
     pub fn list_segments(
         &self,
         camera: Option<&str>,
         after: Option<DateTime<Utc>>,
         before: Option<DateTime<Utc>>,
         limit: i64,
+        offset: i64,
     ) -> Result<Vec<Segment>> {
         let conn = self.lock()?;
         let after_s = after.map(|t| t.to_rfc3339());
@@ -118,10 +139,11 @@ impl Db {
              WHERE (?1 IS NULL OR camera = ?1)
                AND (?2 IS NULL OR start_time >= ?2)
                AND (?3 IS NULL OR start_time <= ?3)
-             ORDER BY start_time DESC LIMIT ?4",
+             ORDER BY start_time DESC, id DESC
+             LIMIT ?4 OFFSET ?5",
         )?;
         let rows = stmt.query_map(
-            params![camera, after_s, before_s, limit],
+            params![camera, after_s, before_s, limit, offset],
             |row| {
                 Ok(Segment {
                     id: row.get(0)?,
@@ -229,15 +251,26 @@ impl Db {
         Ok(())
     }
 
-    pub fn list_events(&self, camera: Option<&str>, limit: i64) -> Result<Vec<Event>> {
+    pub fn count_events(&self, camera: Option<&str>) -> Result<i64> {
+        let conn = self.lock()?;
+        let n = conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE (?1 IS NULL OR camera = ?1)",
+            params![camera],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
+    pub fn list_events(&self, camera: Option<&str>, limit: i64, offset: i64) -> Result<Vec<Event>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note FROM events
              WHERE (?1 IS NULL OR camera = ?1)
-             ORDER BY start_time DESC LIMIT ?2",
+             ORDER BY start_time DESC, id DESC
+             LIMIT ?2 OFFSET ?3",
         )?;
         let rows = stmt
-            .query_map(params![camera, limit], map_event)?
+            .query_map(params![camera, limit, offset], map_event)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }

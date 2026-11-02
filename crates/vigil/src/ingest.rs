@@ -5,10 +5,10 @@ use crate::detect::DetectJob;
 use crate::proc_guard;
 use crate::record;
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::Local;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -21,6 +21,27 @@ use vigil_common::{Config, UsbConfig};
 enum SourceKind {
     Rtsp,
     Usb,
+}
+
+/// No raw frames, or a restream with nobody publishing, for this long means the
+/// camera socket died (sleep, Wi-Fi drop) while FFmpeg is still running.
+const STALL_MS: u64 = 20_000;
+
+fn mono_ms() -> u64 {
+    static BOOT: OnceLock<Instant> = OnceLock::new();
+    BOOT.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// Why the camera FFmpeg should be killed and started again.
+/// `publisher_missing_ms` is set only when go2rtc answered and this camera has no producer.
+fn restart_reason(stale_ms: u64, publisher_missing_ms: Option<u64>) -> Option<&'static str> {
+    if stale_ms > STALL_MS {
+        return Some("no frames");
+    }
+    if publisher_missing_ms.is_some_and(|ms| ms > STALL_MS) {
+        return Some("go2rtc publisher missing");
+    }
+    None
 }
 
 pub async fn run_all_cameras(
@@ -120,10 +141,23 @@ async fn run_combined(
                     spawn_ffmpeg_stderr_logger(camera.clone(), stderr);
                 }
 
-                let raw =
-                    read_raw_loop(cfg.clone(), ring.clone(), camera.clone(), stdout, tx.clone());
+                let clock = Arc::new(AtomicU64::new(mono_ms()));
+                let raw = read_raw_loop(
+                    cfg.clone(),
+                    ring.clone(),
+                    camera.clone(),
+                    stdout,
+                    tx.clone(),
+                    clock.clone(),
+                );
                 let tracker =
                     record::segment_tracker_loop(cfg.clone(), db.clone(), camera.clone());
+                let recover = watch_stream(
+                    clock,
+                    camera.clone(),
+                    do_restream,
+                    cfg.go2rtc.api.clone(),
+                );
 
                 let child_pid = child.id();
                 tokio::select! {
@@ -139,6 +173,11 @@ async fn run_combined(
                     }
                     _ = tracker => {
                         warn!(camera = %camera, "segment tracker ended unexpectedly");
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                    }
+                    reason = recover => {
+                        warn!(camera = %camera, reason, "restarting camera stream");
                         let _ = child.kill().await;
                         let _ = child.wait().await;
                     }
@@ -266,7 +305,8 @@ async fn spawn_combined_ffmpeg(
 ) -> Result<Child> {
     let out_dir = cfg.recordings_dir().join(camera);
     std::fs::create_dir_all(&out_dir)?;
-    let today = Utc::now().format("%Y-%m-%d").to_string();
+    // FFmpeg strftime uses the machine's local clock, not UTC.
+    let today = Local::now().format("%Y-%m-%d").to_string();
     let day_dir = out_dir.join(&today);
     let new_day = !day_dir.exists();
     std::fs::create_dir_all(&day_dir)?;
@@ -398,12 +438,68 @@ async fn spawn_combined_ffmpeg(
     Ok(child)
 }
 
+async fn watch_stream(
+    clock: Arc<AtomicU64>,
+    camera: String,
+    restream: bool,
+    go2rtc_api: String,
+) -> &'static str {
+    let mut missing_since: Option<Instant> = None;
+    loop {
+        sleep(Duration::from_secs(5)).await;
+        let stale_ms = mono_ms().saturating_sub(clock.load(Ordering::Relaxed));
+        let publisher_missing_ms = if !restream {
+            None
+        } else {
+            match publisher_alive(&go2rtc_api, &camera).await {
+                Some(true) => {
+                    missing_since = None;
+                    None
+                }
+                Some(false) => {
+                    let since = missing_since.get_or_insert_with(Instant::now);
+                    Some(since.elapsed().as_millis() as u64)
+                }
+                None => {
+                    missing_since = None;
+                    None
+                }
+            }
+        };
+        if let Some(reason) = restart_reason(stale_ms, publisher_missing_ms) {
+            return reason;
+        }
+    }
+}
+
+/// `Some` when go2rtc answered. `None` when it is down; the go2rtc supervisor restarts that process.
+async fn publisher_alive(api: &str, camera: &str) -> Option<bool> {
+    let base = api.trim().trim_end_matches('/');
+    let base = base.strip_prefix("http://").unwrap_or(base);
+    let base = base.strip_prefix("https://").unwrap_or(base);
+    let url = format!("http://{base}/api/streams");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let body: serde_json::Value = client.get(url).send().await.ok()?.json().await.ok()?;
+    Some(publishers_present(&body, camera))
+}
+
+fn publishers_present(body: &serde_json::Value, camera: &str) -> bool {
+    body.get(camera)
+        .and_then(|cam| cam.get("producers"))
+        .and_then(|producers| producers.as_array())
+        .is_some_and(|list| !list.is_empty())
+}
+
 async fn read_raw_loop<R: AsyncReadExt + Unpin>(
     cfg: Arc<Config>,
     ring: Arc<FrameRing>,
     camera: String,
     reader: R,
     tx: mpsc::Sender<DetectJob>,
+    clock: Arc<AtomicU64>,
 ) -> Result<()> {
     let live_dir = cfg.live_snapshots_dir();
     let width = cfg.detect.width;
@@ -426,6 +522,7 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
         if let Err(e) = reader.read_exact(slot_w.payload_mut()).await {
             return Err(e.into());
         }
+        clock.store(mono_ms(), Ordering::Relaxed);
 
         // JPEG is only the fallback preview. Encoding it inline stalled the raw pipe,
         // which stalled the go2rtc restream on the same FFmpeg process.
@@ -558,6 +655,31 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["-allowed_media_types", "video"]));
         assert!(args.windows(2).any(|w| w == ["-user_agent", "Dahua Rtsp Client"]));
         assert!(args.windows(2).any(|w| w == ["-timeout", "5000000"]));
+    }
+
+    #[test]
+    fn a_quiet_stream_restarts_and_a_live_one_does_not() {
+        assert_eq!(restart_reason(0, None), None);
+        assert_eq!(restart_reason(STALL_MS, None), None);
+        assert_eq!(restart_reason(STALL_MS + 1, None), Some("no frames"));
+        assert_eq!(restart_reason(1_000, Some(STALL_MS)), None);
+        assert_eq!(
+            restart_reason(1_000, Some(STALL_MS + 1)),
+            Some("go2rtc publisher missing")
+        );
+    }
+
+    #[test]
+    fn go2rtc_publishers_count_only_a_non_empty_list() {
+        let body = serde_json::json!({
+            "cam1": { "producers": [{ "id": 1 }] },
+            "cam2": { "producers": null },
+            "cam3": { "producers": [] }
+        });
+        assert!(publishers_present(&body, "cam1"));
+        assert!(!publishers_present(&body, "cam2"));
+        assert!(!publishers_present(&body, "cam3"));
+        assert!(!publishers_present(&body, "cam4"));
     }
 
     #[test]

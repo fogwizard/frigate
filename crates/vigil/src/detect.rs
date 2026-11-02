@@ -1,7 +1,7 @@
 use crate::events::EventEngine;
 use crate::infer_client::InferClient;
 use crate::ingest;
-use chrono::{Timelike, Utc};
+use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -205,7 +205,9 @@ async fn release_stuck_feeders(cfg: &Config, db: &crate::db::Db) {
         let still_open = match feed_seen(db, camera, now) {
             Ok(FeedSeen::Busy(ev)) => {
                 let elapsed = now.signed_duration_since(ev.start_time).num_seconds();
-                now.hour() == 7 && elapsed >= 0 && (elapsed as u64) < cam.feed_time
+                crate::feed::local_hour(now) == 7
+                    && elapsed >= 0
+                    && (elapsed as u64) < cam.feed_time
             }
             Ok(_) => false,
             Err(e) => {

@@ -185,6 +185,7 @@ impl EventEngine {
                 Some(start - ChronoDuration::seconds(120)),
                 Some(end),
                 50,
+                0,
             )
             .ok()?;
         let paths: Vec<PathBuf> = segs

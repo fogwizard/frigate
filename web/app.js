@@ -1,10 +1,40 @@
 const $ = (s) => document.querySelector(s);
 
+function ensurePager(id, newerId, rangeId, olderId) {
+  let bar = $("#" + id);
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = id;
+    bar.className = "pager";
+    bar.hidden = true;
+    bar.innerHTML =
+      `<button id="${newerId}" type="button" disabled>上翻50条</button>` +
+      `<span id="${rangeId}"></span>` +
+      `<button id="${olderId}" type="button">下翻50条</button>`;
+    const health = $("#health");
+    if (health) health.before(bar);
+    else document.querySelector(".top")?.appendChild(bar);
+  }
+  return bar;
+}
+
+function ensureEventsPager() {
+  return ensurePager("events-pager", "events-newer", "events-range", "events-older");
+}
+
+function ensureRecordingsPager() {
+  return ensurePager("recordings-pager", "recordings-newer", "recordings-range", "recordings-older");
+}
+
 function switchPage(name) {
   document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
   document.querySelectorAll("nav button").forEach((b) => b.classList.remove("active"));
   $(`#page-${name}`).classList.add("active");
   document.querySelector(`nav button[data-page="${name}"]`).classList.add("active");
+  const eventsPager = ensureEventsPager();
+  if (eventsPager) eventsPager.hidden = name !== "events";
+  const recordingsPager = ensureRecordingsPager();
+  if (recordingsPager) recordingsPager.hidden = name !== "recordings";
   if (name === "events") loadEvents();
   if (name === "recordings") loadRecordings();
 }
@@ -35,14 +65,18 @@ function setSignal(card, ok) {
 }
 
 function videoShowing(video) {
-  return !!(
-    video &&
-    video.style.display !== "none" &&
-    video.videoWidth > 0 &&
-    video.readyState >= 2 &&
-    !video.paused &&
-    !video.ended
-  );
+  if (!video || video.videoWidth <= 0 || video.readyState < 2 || video.paused || video.ended) {
+    return false;
+  }
+  const now = performance.now();
+  const prevT = Number(video.dataset.playT);
+  const prevAt = Number(video.dataset.playAt || "0");
+  if (!Number.isFinite(prevT) || video.currentTime > prevT + 0.02) {
+    video.dataset.playT = String(video.currentTime);
+    video.dataset.playAt = String(now);
+    return video.currentTime > 0.05;
+  }
+  return prevAt > 0 && now - prevAt < 1000 && prevT > 0.05;
 }
 
 async function loadLive() {
@@ -76,13 +110,28 @@ async function loadLive() {
         card.querySelector("img").classList.add("dead");
         setSignal(card, true);
       };
-      video.addEventListener("playing", showLive);
+      const showSnap = () => {
+        const img = card.querySelector("img");
+        if (!img || img.classList.contains("dead") || img.naturalWidth <= 0) return;
+        video.style.display = "none";
+      };
+      video.addEventListener("playing", () => {
+        if (videoShowing(video)) showLive();
+      });
+      let lastSeek = 0;
       const stayLive = () => {
-        if (videoShowing(video)) setSignal(card, true);
+        if (videoShowing(video)) showLive();
+        else showSnap();
         if (!video.buffered || !video.buffered.length) return;
         const end = video.buffered.end(video.buffered.length - 1);
         const lag = end - video.currentTime;
-        if (lag > 0.4 && Number.isFinite(lag)) video.currentTime = Math.max(0, end - 0.15);
+        const now = performance.now();
+        // A short seek lands on the previous keyframe and the picture flashes
+        // between that old frame and the live edge.
+        if (lag > 3 && Number.isFinite(lag) && now - lastSeek > 2000) {
+          lastSeek = now;
+          video.currentTime = Math.max(0, end - 0.2);
+        }
       };
       video.addEventListener("progress", stayLive);
       setInterval(stayLive, 250);
@@ -106,21 +155,32 @@ async function loadLive() {
 function refreshSnapshots() {
   document.querySelectorAll("#live-grid .card").forEach((card) => {
     const video = card.querySelector("video");
+    const img = card.querySelector("img");
+    if (!img) return;
     if (videoShowing(video)) {
+      img.classList.add("dead");
       setSignal(card, true);
       return;
     }
-    const img = card.querySelector("img");
-    if (!img) return;
+    if (img.dataset.loading === "1") return;
+    const gen = (Number(img.dataset.gen) || 0) + 1;
+    img.dataset.gen = String(gen);
+    img.dataset.loading = "1";
     const cam = card.dataset.cam;
     const next = new Image();
     next.onload = () => {
+      if (Number(img.dataset.gen) === gen) img.dataset.loading = "0";
+      if (Number(img.dataset.gen) !== gen || videoShowing(card.querySelector("video"))) {
+        if (videoShowing(card.querySelector("video"))) img.classList.add("dead");
+        return;
+      }
       img.src = next.src;
       img.classList.remove("dead");
       setSignal(card, true);
     };
     next.onerror = () => {
-      if (videoShowing(video)) return;
+      if (Number(img.dataset.gen) === gen) img.dataset.loading = "0";
+      if (Number(img.dataset.gen) !== gen || videoShowing(card.querySelector("video"))) return;
       if (img.naturalWidth > 0 && !img.classList.contains("dead")) return;
       img.classList.add("dead");
       setSignal(card, false);
@@ -181,12 +241,30 @@ async function refreshBoxes() {
   }
 }
 
+const EVENTS_PAGE = 50;
+let eventsOffset = 0;
+
+function setEventsPager(total, shown) {
+  const newer = $("#events-newer");
+  const older = $("#events-older");
+  const range = $("#events-range");
+  if (newer) newer.disabled = eventsOffset <= 0;
+  if (older) older.disabled = eventsOffset + shown >= total;
+  if (range) {
+    range.textContent = total
+      ? `${eventsOffset + 1}–${eventsOffset + shown} / ${total}`
+      : "0 条";
+  }
+}
+
 async function loadEvents() {
   const list = $("#events-list");
   try {
-    const r = await fetch("/api/events?limit=50");
+    const r = await fetch(`/api/events?limit=${EVENTS_PAGE}&offset=${eventsOffset}`);
     const j = await r.json();
     const events = j.events || [];
+    const total = Number.isFinite(Number(j.total)) ? Number(j.total) : eventsOffset + events.length;
+    setEventsPager(total, events.length);
     if (!events.length) {
       list.innerHTML = '<div class="empty">暂无事件</div>';
       return;
@@ -215,12 +293,30 @@ async function loadEvents() {
   }
 }
 
+const RECORDINGS_PAGE = 50;
+let recordingsOffset = 0;
+
+function setRecordingsPager(total, shown) {
+  const newer = $("#recordings-newer");
+  const older = $("#recordings-older");
+  const range = $("#recordings-range");
+  if (newer) newer.disabled = recordingsOffset <= 0;
+  if (older) older.disabled = recordingsOffset + shown >= total;
+  if (range) {
+    range.textContent = total
+      ? `${recordingsOffset + 1}–${recordingsOffset + shown} / ${total}`
+      : "0 条";
+  }
+}
+
 async function loadRecordings() {
   const list = $("#rec-list");
   try {
-    const r = await fetch("/api/recordings?limit=80");
+    const r = await fetch(`/api/recordings?limit=${RECORDINGS_PAGE}&offset=${recordingsOffset}`);
     const j = await r.json();
     const rows = j.recordings || [];
+    const total = Number.isFinite(Number(j.total)) ? Number(j.total) : recordingsOffset + rows.length;
+    setRecordingsPager(total, rows.length);
     if (!rows.length) {
       list.innerHTML = '<div class="empty">暂无录像分段（需 FFmpeg 与可达 RTSP）</div>';
       return;
@@ -242,6 +338,27 @@ async function loadRecordings() {
     list.innerHTML = `<div class="empty">加载失败: ${e}</div>`;
   }
 }
+
+ensureEventsPager();
+ensureRecordingsPager();
+document.addEventListener("click", (ev) => {
+  const eventsNewer = ev.target.closest("#events-newer");
+  const eventsOlder = ev.target.closest("#events-older");
+  if (eventsNewer || eventsOlder) {
+    if (eventsNewer?.disabled || eventsOlder?.disabled) return;
+    eventsOffset = eventsNewer ? Math.max(0, eventsOffset - EVENTS_PAGE) : eventsOffset + EVENTS_PAGE;
+    loadEvents();
+    return;
+  }
+  const recordingsNewer = ev.target.closest("#recordings-newer");
+  const recordingsOlder = ev.target.closest("#recordings-older");
+  if (!recordingsNewer && !recordingsOlder) return;
+  if (recordingsNewer?.disabled || recordingsOlder?.disabled) return;
+  recordingsOffset = recordingsNewer
+    ? Math.max(0, recordingsOffset - RECORDINGS_PAGE)
+    : recordingsOffset + RECORDINGS_PAGE;
+  loadRecordings();
+});
 
 loadLive();
 refreshHealth();

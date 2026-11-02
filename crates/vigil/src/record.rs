@@ -163,7 +163,7 @@ mod tests {
         assert!(!cam.join("2026-10-14").exists());
         assert!(cam.join("2026-10-15").exists());
         assert!(cam.join("2026-10-21").exists());
-        assert!(db.list_segments(Some("cam1"), None, None, 10).unwrap().is_empty());
+        assert!(db.list_segments(Some("cam1"), None, None, 10, 0).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
