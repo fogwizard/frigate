@@ -178,25 +178,8 @@ impl EventEngine {
         let start = ev.start_time - pre;
         let end = ev.end_time.unwrap_or(Utc::now());
 
-        let segs = self
-            .db
-            .list_segments(
-                Some(&ev.camera),
-                Some(start - ChronoDuration::seconds(120)),
-                Some(end),
-                50,
-                0,
-            )
-            .ok()?;
-        let paths: Vec<PathBuf> = segs
-            .into_iter()
-            .filter(|s| {
-                let seg_end = s.end_time.unwrap_or(Utc::now());
-                s.start_time <= end && seg_end >= start
-            })
-            .map(|s| PathBuf::from(s.path))
-            .filter(|p| p.exists())
-            .collect();
+        let root = self.cfg.recordings_dir().join(&ev.camera);
+        let paths = crate::record::recordings_covering(&root, start, end);
 
         if paths.is_empty() {
             return None;

@@ -57,6 +57,17 @@ impl Db {
             .map_err(|_| anyhow::anyhow!("db lock poisoned"))
     }
 
+    pub fn segment_paths(&self, camera: &str) -> Result<std::collections::HashSet<String>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT path FROM segments WHERE camera = ?1")?;
+        let rows = stmt.query_map(params![camera], |row| row.get::<_, String>(0))?;
+        let mut out = std::collections::HashSet::new();
+        for row in rows {
+            out.insert(row?.replace('\\', "/"));
+        }
+        Ok(out)
+    }
+
     pub fn insert_segment(
         &self,
         camera: &str,
@@ -71,11 +82,11 @@ impl Db {
         Ok(conn.last_insert_rowid())
     }
 
-    pub fn finish_segment(&self, id: i64, end: DateTime<Utc>) -> Result<()> {
+    pub fn finish_segment_at_path(&self, path: &str, end: DateTime<Utc>) -> Result<()> {
         let conn = self.lock()?;
         conn.execute(
-            "UPDATE segments SET end_time = ?1 WHERE id = ?2",
-            params![end.to_rfc3339(), id],
+            "UPDATE segments SET end_time = ?1 WHERE path = ?2 AND end_time IS NULL",
+            params![end.to_rfc3339(), path],
         )?;
         Ok(())
     }

@@ -1,5 +1,5 @@
 use crate::db::Db;
-use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -8,37 +8,128 @@ use vigil_common::Config;
 
 /// Poll recording directory and update SQLite until cancelled.
 pub async fn segment_tracker_loop(cfg: Arc<Config>, db: Arc<Db>, camera: String) {
-    let interval = Duration::from_secs(cfg.record.segment_secs.max(5) as u64);
-    let mut last_seen: Option<PathBuf> = None;
-    let mut last_day: Option<PathBuf> = None;
-    let mut open_id: Option<i64> = None;
+    let interval = Duration::from_secs(5);
     let camera_root = cfg.recordings_dir().join(&camera);
+    let mut last_day: Option<NaiveDate> = None;
     // Existing backlog is trimmed as soon as this camera's tracker starts.
-    // A later day-folder change (ffmpeg strftime at midnight) trims again.
-    prune_camera(&cfg, &db, &camera);
-
+    // A later local day trims again.
     loop {
+        let today = Local::now().date_naive();
+        if last_day != Some(today) {
+            prune_camera(&cfg, &db, &camera);
+            last_day = Some(today);
+        }
+        if let Err(e) = index_recordings(&db, &camera, &camera_root) {
+            warn!(camera = %camera, error = %e, "index recordings");
+        }
         sleep(interval).await;
-        if let Some(latest) = newest_mp4(&camera_root) {
-            if let Some(day) = latest.parent() {
-                if last_day.as_deref() != Some(day) {
-                    prune_camera(&cfg, &db, &camera);
-                    last_day = Some(day.to_path_buf());
-                }
-            }
-            if last_seen.as_ref() != Some(&latest) {
-                if let Some(id) = open_id.take() {
-                    let _ = db.finish_segment(id, Utc::now());
-                }
-                let rel = latest.to_string_lossy().to_string();
-                match db.insert_segment(&camera, &rel, Utc::now()) {
-                    Ok(id) => open_id = Some(id),
-                    Err(e) => warn!(error = %e, "insert segment"),
-                }
-                last_seen = Some(latest);
-            }
+    }
+}
+
+/// Recording files whose filename time overlaps `[start, end]`.
+/// The segment table can miss a file that was replaced before the next poll,
+/// so clip building reads the directory instead.
+pub fn recordings_covering(camera_root: &Path, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<PathBuf> {
+    let mut files = recording_files(camera_root, start, end);
+    files.sort_by_key(|(t, _)| *t);
+    let mut out = Vec::new();
+    for i in 0..files.len() {
+        let file_start = files[i].0;
+        let file_end = files.get(i + 1).map(|(t, _)| *t).unwrap_or_else(Utc::now);
+        if file_start <= end && file_end >= start {
+            out.push(files[i].1.clone());
         }
     }
+    out
+}
+
+fn index_recordings(db: &Db, camera: &str, camera_root: &Path) -> anyhow::Result<()> {
+    let today = Local::now().date_naive();
+    let mut days = vec![today];
+    if let Some(yesterday) = today.pred_opt() {
+        days.push(yesterday);
+    }
+    let known = db.segment_paths(camera)?;
+    let mut found = Vec::new();
+    for day in days {
+        let dir = camera_root.join(day.format("%Y-%m-%d").to_string());
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("mp4") || !usable_recording(&path) {
+                continue;
+            }
+            let Some(start) = recording_time(&path) else {
+                continue;
+            };
+            let rel = path.to_string_lossy().to_string();
+            if !known.contains(&rel.replace('\\', "/")) {
+                db.insert_segment(camera, &rel, start)?;
+            }
+            found.push((start, rel));
+        }
+    }
+    found.sort_by_key(|(start, _)| *start);
+    for pair in found.windows(2) {
+        db.finish_segment_at_path(&pair[0].1, pair[1].0)?;
+    }
+    Ok(())
+}
+
+fn recording_files(camera_root: &Path, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<(DateTime<Utc>, PathBuf)> {
+    let mut out = Vec::new();
+    for day in day_span(start, end) {
+        let dir = camera_root.join(day.format("%Y-%m-%d").to_string());
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("mp4") || !usable_recording(&path) {
+                continue;
+            }
+            let Some(t) = recording_time(&path) else {
+                continue;
+            };
+            out.push((t, path));
+        }
+    }
+    out
+}
+
+fn day_span(start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<NaiveDate> {
+    let mut day = start.with_timezone(&Local).date_naive();
+    let last = end.with_timezone(&Local).date_naive();
+    let mut out = Vec::new();
+    loop {
+        out.push(day);
+        if day >= last {
+            break;
+        }
+        let Some(next) = day.succ_opt() else {
+            break;
+        };
+        day = next;
+    }
+    out
+}
+
+/// `.../YYYY-MM-DD/HH-MM-SS.mp4` is the machine-local time FFmpeg wrote.
+fn recording_time(path: &Path) -> Option<DateTime<Utc>> {
+    let stem = path.file_stem()?.to_str()?;
+    let day = path.parent()?.file_name()?.to_str()?;
+    let date = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
+    let time = NaiveTime::parse_from_str(stem, "%H-%M-%S").ok()?;
+    Local
+        .from_local_datetime(&date.and_time(time))
+        .earliest()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+fn usable_recording(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.len() >= 1024)
 }
 
 /// Drop local day directories once they fall outside the retain window.
@@ -162,41 +253,6 @@ fn day_dirs(camera_root: &Path) -> Vec<(NaiveDate, PathBuf)> {
             Some((date, path))
         })
         .collect()
-}
-
-fn newest_mp4(root: &Path) -> Option<PathBuf> {
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for p in walkdir(root) {
-        if p.extension().and_then(|e| e.to_str()) != Some("mp4") {
-            continue;
-        }
-        let Ok(meta) = std::fs::metadata(&p) else {
-            continue;
-        };
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
-            best = Some((modified, p));
-        }
-    }
-    best.map(|(_, p)| p)
-}
-
-fn walkdir(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(rd) = std::fs::read_dir(root) else {
-        return out;
-    };
-    for entry in rd.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            out.extend(walkdir(&p));
-        } else {
-            out.push(p);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -329,6 +385,28 @@ mod tests {
         assert!(keep_clip.exists());
         assert!(db.get_event(&old_id.to_string()).unwrap().is_none());
         assert!(db.get_event(&keep_id.to_string()).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_middle_recording_covers_the_event() {
+        let root = std::env::temp_dir().join(format!("vigil-cover-{}", uuid::Uuid::new_v4()));
+        let day = root.join("cam1").join("2026-11-03");
+        std::fs::create_dir_all(&day).unwrap();
+        for name in ["20-50-04.mp4", "20-53-22.mp4", "20-57-54.mp4"] {
+            std::fs::write(day.join(name), vec![0u8; 2048]).unwrap();
+        }
+        let start = Local
+            .with_ymd_and_hms(2026, 11, 3, 20, 53, 48)
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = Local
+            .with_ymd_and_hms(2026, 11, 3, 20, 53, 59)
+            .unwrap()
+            .with_timezone(&Utc);
+        let paths = recordings_covering(&root.join("cam1"), start, end);
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("20-53-22.mp4"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
