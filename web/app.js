@@ -57,7 +57,34 @@ async function fillEventCameras() {
 }
 
 function ensureRecordingsPager() {
-  return ensurePager("recordings-pager", "recordings-newer", "recordings-range", "recordings-older");
+  const bar = ensurePager("recordings-pager", "recordings-newer", "recordings-range", "recordings-older");
+  if (bar && !$("#recordings-camera")) {
+    const select = document.createElement("select");
+    select.id = "recordings-camera";
+    select.setAttribute("aria-label", "摄像头");
+    select.innerHTML = '<option value="">所有镜头</option>';
+    bar.prepend(select);
+  }
+  return bar;
+}
+
+function recordingCamera() {
+  return $("#recordings-camera")?.value || "";
+}
+
+async function fillRecordingCameras() {
+  const select = $("#recordings-camera");
+  if (!select) return;
+  const chosen = select.value;
+  let names = [];
+  try {
+    const r = await fetch("/api/cameras");
+    if (r.ok) names = (await r.json()).cameras || [];
+  } catch {
+    names = [];
+  }
+  select.innerHTML = names.map(cameraOption).join("") + '<option value="">所有镜头</option>';
+  select.value = names.includes(chosen) ? chosen : "";
 }
 
 function switchPage(name) {
@@ -348,7 +375,11 @@ function setRecordingsPager(total, shown) {
 async function loadRecordings() {
   const list = $("#rec-list");
   try {
-    const r = await fetch(`/api/recordings?limit=${RECORDINGS_PAGE}&offset=${recordingsOffset}`);
+    const camera = recordingCamera();
+    const cameraQuery = camera ? `&camera=${encodeURIComponent(camera)}` : "";
+    const r = await fetch(
+      `/api/recordings?limit=${RECORDINGS_PAGE}&offset=${recordingsOffset}${cameraQuery}`
+    );
     const j = await r.json();
     const rows = j.recordings || [];
     const total = Number.isFinite(Number(j.total)) ? Number(j.total) : recordingsOffset + rows.length;
@@ -378,9 +409,14 @@ async function loadRecordings() {
 ensureEventsPager();
 ensureRecordingsPager();
 fillEventCameras();
+fillRecordingCameras();
 $("#events-camera")?.addEventListener("change", () => {
   eventsOffset = 0;
   loadEvents();
+});
+$("#recordings-camera")?.addEventListener("change", () => {
+  recordingsOffset = 0;
+  loadRecordings();
 });
 document.addEventListener("click", (ev) => {
   const eventsNewer = ev.target.closest("#events-newer");
