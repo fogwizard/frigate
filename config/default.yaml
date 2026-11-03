@@ -89,11 +89,14 @@ cameras:
 
 record:
   enabled: true
-  retain_days: 7
+  # 保留今天和之前 2 个本地日。第 4 天 0 点删掉最旧的那一天，
+  # 同时删掉 data/clips 里同一天的片段和对应事件。
+  retain_days: 3
   segment_secs: 60
 
 events:
-  retain_days: 14
+  # 事件和片段跟录像同一天删除，避免列表里留下点不开的记录。
+  retain_days: 3
   pre_capture_secs: 5
   post_capture_secs: 5
 

@@ -325,20 +325,6 @@ impl Db {
         Ok(n)
     }
 
-    pub fn delete_old_segments(&self, before: DateTime<Utc>) -> Result<Vec<String>> {
-        let conn = self.lock()?;
-        let mut stmt = conn.prepare("SELECT id, path FROM segments WHERE start_time < ?1")?;
-        let rows: Vec<(i64, String)> = stmt
-            .query_map(params![before.to_rfc3339()], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .filter_map(|r| r.ok())
-            .collect();
-        let paths: Vec<String> = rows.iter().map(|(_, p)| p.clone()).collect();
-        for (id, _) in &rows {
-            conn.execute("DELETE FROM segments WHERE id = ?1", params![id])?;
-        }
-        Ok(paths)
-    }
-
     pub fn delete_old_events(
         &self,
         before: DateTime<Utc>,

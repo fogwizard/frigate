@@ -182,7 +182,7 @@ fn default_true() -> bool {
     true
 }
 fn default_retain_days() -> u32 {
-    7
+    3
 }
 fn default_segment_secs() -> u32 {
     60
@@ -209,7 +209,7 @@ pub struct EventsConfig {
 }
 
 fn default_events_retain() -> u32 {
-    14
+    3
 }
 fn default_pre_capture() -> u32 {
     5

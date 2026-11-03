@@ -311,7 +311,7 @@ async fn spawn_combined_ffmpeg(
     let new_day = !day_dir.exists();
     std::fs::create_dir_all(&day_dir)?;
     if new_day {
-        record::prune_expired_days(&out_dir, cfg.record.retain_days, db, camera);
+        record::prune_camera(cfg, db, camera);
     }
     let pattern = out_dir
         .join("%Y-%m-%d")
