@@ -381,6 +381,15 @@ pub async fn cut_detection_clip(
     }
 }
 
+/// Concat demuxer resolves a relative path from the list file, which lives in
+/// `data/clips`, not from the process working directory.
+fn ffmpeg_concat_path(path: &Path) -> String {
+    let abs = std::env::current_dir()
+        .map(|dir| dir.join(path))
+        .unwrap_or_else(|_| path.to_path_buf());
+    abs.to_string_lossy().replace('\\', "/")
+}
+
 fn file_recently_written(path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
@@ -645,7 +654,7 @@ async fn cut_clip(
         let list = dir.join(format!("{id}.txt"));
         let body = files
             .iter()
-            .map(|(_, p)| format!("file '{}'", p.to_string_lossy().replace('\\', "/")))
+            .map(|(_, p)| format!("file '{}'", ffmpeg_concat_path(p)))
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(&list, body).ok()?;
@@ -720,7 +729,7 @@ async fn ffmpeg(bin: &str, args: &[&str]) -> bool {
     {
         Ok(out) if out.status.success() => true,
         Ok(out) => {
-            tracing::debug!(stderr = %String::from_utf8_lossy(&out.stderr), "feed clip ffmpeg failed");
+            warn!(stderr = %brief(&String::from_utf8_lossy(&out.stderr)), "clip ffmpeg failed");
             false
         }
         Err(e) => {
@@ -849,6 +858,13 @@ mod tests {
             ClipFiles::Ready(got) => assert_eq!(got.len(), 1),
             ClipFiles::Wait => panic!("closed segment should be ready"),
         }
+    }
+
+    #[test]
+    fn concat_paths_are_absolute_so_ffmpeg_does_not_look_next_to_the_list() {
+        let listed = ffmpeg_concat_path(Path::new("data/recordings/cam1/2026-11-04/20-00-00.mp4"));
+        assert!(listed.contains("data/recordings/cam1/2026-11-04/20-00-00.mp4"));
+        assert!(Path::new(&listed).is_absolute());
     }
 
     #[test]
