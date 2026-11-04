@@ -339,6 +339,94 @@ pub async fn review_feed(
     }
 }
 
+pub enum ClipCut {
+    /// The recording that contains `end` is still open.
+    Wait,
+    Done(String),
+    Failed,
+}
+
+/// Cut `[start, end]` once every overlapping segment file has been closed.
+/// `start` and `end` are the event timestamps, including any pre-roll the caller added.
+pub async fn cut_detection_clip(
+    cfg: &Config,
+    camera: &str,
+    id: Uuid,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> ClipCut {
+    let root = cfg.recordings_dir().join(camera);
+    let files: Vec<_> = recording_files(&root)
+        .into_iter()
+        .filter(|(_, path)| {
+            std::fs::metadata(path).is_ok_and(|meta| meta.len() >= 1024)
+        })
+        .collect();
+    let newest_closed = match files.last() {
+        Some((_, path)) => !file_recently_written(path),
+        None => false,
+    };
+    let Some(needed) = closed_segments_covering(
+        &files,
+        start,
+        end,
+        cfg.record.segment_secs as i64,
+        newest_closed,
+    ) else {
+        return ClipCut::Wait;
+    };
+    match cut_clip(cfg, id, &needed, start, end).await {
+        Some(path) => ClipCut::Done(path),
+        None => ClipCut::Failed,
+    }
+}
+
+fn file_recently_written(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return true;
+    };
+    Utc::now() - DateTime::<Utc>::from(modified) < chrono::Duration::seconds(3)
+}
+
+/// Files that overlap `[start, end]`, but only after the file containing `end` is closed.
+/// A missing later file means that segment is still being written, unless the newest
+/// file has stopped growing.
+fn closed_segments_covering(
+    files: &[(DateTime<Utc>, PathBuf)],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    segment_secs: i64,
+    newest_closed: bool,
+) -> Option<Vec<(DateTime<Utc>, PathBuf)>> {
+    if files.is_empty() {
+        return None;
+    }
+    let container = files.iter().rposition(|(t, _)| *t <= end)?;
+    if container + 1 == files.len() && !newest_closed {
+        return None;
+    }
+    let mut needed = Vec::new();
+    for i in 0..=container {
+        let t = files[i].0;
+        let next = if let Some(following) = files.get(i + 1) {
+            following.0
+        } else {
+            t + chrono::Duration::seconds(segment_secs.max(1))
+        };
+        if t < end && next > start {
+            needed.push(files[i].clone());
+        }
+    }
+    if needed.is_empty() {
+        None
+    } else {
+        Some(needed)
+    }
+}
+
 async fn wait_for_clip(cfg: &Config, camera: &str, id: Uuid, start: DateTime<Utc>, end: DateTime<Utc>) -> Option<String> {
     let wait = std::time::Duration::from_secs(u64::from(cfg.record.segment_secs) * 2 + 15);
     let deadline = tokio::time::Instant::now() + wait;
@@ -761,6 +849,27 @@ mod tests {
             ClipFiles::Ready(got) => assert_eq!(got.len(), 1),
             ClipFiles::Wait => panic!("closed segment should be ready"),
         }
+    }
+
+    #[test]
+    fn an_event_waits_until_the_segment_containing_its_end_is_closed() {
+        let t = |h, m, s| Utc.with_ymd_and_hms(2026, 11, 4, h, m, s).unwrap();
+        let open = vec![
+            (t(13, 40, 48), PathBuf::from("21-40-48.mp4")),
+            (t(13, 41, 48), PathBuf::from("21-41-48.mp4")),
+        ];
+        let start = t(13, 41, 41);
+        let end = t(13, 41, 53);
+        assert!(closed_segments_covering(&open, start, end, 60, false).is_none());
+        let closed = vec![
+            (t(13, 40, 48), PathBuf::from("21-40-48.mp4")),
+            (t(13, 41, 48), PathBuf::from("21-41-48.mp4")),
+            (t(13, 42, 48), PathBuf::from("21-42-48.mp4")),
+        ];
+        let got = closed_segments_covering(&closed, start, end, 60, false).unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got[0].1.ends_with("21-40-48.mp4"));
+        assert!(got[1].1.ends_with("21-41-48.mp4"));
     }
 
     #[test]

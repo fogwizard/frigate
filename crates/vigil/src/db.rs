@@ -220,6 +220,32 @@ impl Db {
         Ok(())
     }
 
+    pub fn set_event_clip(&self, id: Uuid, clip_path: &str) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE events SET clip_path = ?1 WHERE id = ?2",
+            params![clip_path, id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Finished events that never got a clip. Feed clips are cut on their own path.
+    pub fn events_missing_clips(&self, since: DateTime<Utc>) -> Result<Vec<Event>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, camera, label, score, start_time, end_time, snapshot_path, clip_path, note
+             FROM events
+             WHERE end_time IS NOT NULL AND clip_path IS NULL AND label != 'feed'
+               AND end_time >= ?1
+             ORDER BY end_time DESC
+             LIMIT 16",
+        )?;
+        let rows = stmt
+            .query_map(params![since.to_rfc3339()], map_event)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// `day` is the machine-local calendar date. A 07:00 feed in UTC+8 is stored
     /// as 23:00 on the previous UTC date, so a UTC-date prefix would also match
     /// yesterday's 08:00 result and skip today's feed.

@@ -1,11 +1,7 @@
 use crate::db::Db;
-use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
-use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -41,6 +37,7 @@ pub struct EventEngine {
     cfg: Arc<Config>,
     db: Arc<Db>,
     active: Mutex<HashMap<String, ActiveEvent>>,
+    clip_tries: Mutex<HashMap<Uuid, u8>>,
 }
 
 impl EventEngine {
@@ -49,6 +46,7 @@ impl EventEngine {
             cfg,
             db,
             active: Mutex::new(HashMap::new()),
+            clip_tries: Mutex::new(HashMap::new()),
         }
     }
 
@@ -171,64 +169,17 @@ impl EventEngine {
         }
     }
 
+    /// `start_time` is written when the event opens and `end_time` when it closes.
+    /// The clip is the recording between those two clocks, plus the pre-roll.
+    /// Cutting waits until the segment that contains `end_time` has been closed,
+    /// because the file ffmpeg is still writing cannot be read reliably.
     async fn build_clip(&self, ev: &Event) -> Option<String> {
-        let _ = std::fs::create_dir_all(self.cfg.clips_dir());
-        let out = self.cfg.clips_dir().join(format!("{}.mp4", ev.id));
         let pre = ChronoDuration::seconds(self.cfg.events.pre_capture_secs as i64);
         let start = ev.start_time - pre;
-        let end = ev.end_time.unwrap_or(Utc::now());
-
-        let root = self.cfg.recordings_dir().join(&ev.camera);
-        let paths = crate::record::recordings_covering(&root, start, end);
-
-        if paths.is_empty() {
-            return None;
-        }
-
-        if paths.len() == 1 {
-            if copy_segment(&self.cfg.ffmpeg.binary, &paths[0], &out)
-                .await
-                .is_ok()
-            {
-                return Some(out.to_string_lossy().to_string());
-            }
-            return None;
-        }
-
-        let list_path = self.cfg.clips_dir().join(format!("{}.txt", ev.id));
-        let list_body: String = paths
-            .iter()
-            .map(|p| format!("file '{}'", p.to_string_lossy().replace('\\', "/")))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let _ = std::fs::write(&list_path, list_body);
-        let ok = Command::new(&self.cfg.ffmpeg.binary)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                &list_path.to_string_lossy(),
-                "-c",
-                "copy",
-                "-y",
-                &out.to_string_lossy(),
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false);
-        let _ = std::fs::remove_file(&list_path);
-        if ok {
-            Some(out.to_string_lossy().to_string())
-        } else {
-            None
+        let end = ev.end_time.unwrap_or_else(Utc::now);
+        match crate::feed::cut_detection_clip(&self.cfg, &ev.camera, ev.id, start, end).await {
+            crate::feed::ClipCut::Done(path) => Some(path),
+            crate::feed::ClipCut::Wait | crate::feed::ClipCut::Failed => None,
         }
     }
 
@@ -248,31 +199,54 @@ impl EventEngine {
             tick.tick().await;
             let empty = std::collections::HashSet::new();
             self.finish_timed_out(None, &empty).await;
+            self.fill_missing_clips().await;
         }
     }
-}
 
-async fn copy_segment(ffmpeg: &str, input: &PathBuf, output: &PathBuf) -> Result<()> {
-    let status = Command::new(ffmpeg)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            &input.to_string_lossy(),
-            "-c",
-            "copy",
-            "-y",
-            &output.to_string_lossy(),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await?;
-    if status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("ffmpeg clip failed")
+    async fn fill_missing_clips(&self) {
+        let since = Utc::now() - ChronoDuration::hours(12);
+        let pending = match self.db.events_missing_clips(since) {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!(error = %e, "list events missing clips");
+                return;
+            }
+        };
+        let mut cut = false;
+        for ev in pending {
+            if self.clip_tries.lock().await.get(&ev.id).copied().unwrap_or(0) >= 5 {
+                continue;
+            }
+            let pre = ChronoDuration::seconds(self.cfg.events.pre_capture_secs as i64);
+            let start = ev.start_time - pre;
+            let Some(end) = ev.end_time else {
+                continue;
+            };
+            match crate::feed::cut_detection_clip(&self.cfg, &ev.camera, ev.id, start, end).await {
+                crate::feed::ClipCut::Wait => {}
+                crate::feed::ClipCut::Done(path) => {
+                    self.clip_tries.lock().await.remove(&ev.id);
+                    if let Err(e) = self.db.set_event_clip(ev.id, &path) {
+                        warn!(error = %e, id = %ev.id, "save event clip");
+                    } else {
+                        info!(id = %ev.id, camera = %ev.camera, %path, "event clip saved");
+                    }
+                    cut = true;
+                }
+                crate::feed::ClipCut::Failed => {
+                    let mut tries = self.clip_tries.lock().await;
+                    let n = tries.entry(ev.id).or_insert(0);
+                    *n += 1;
+                    if *n == 5 {
+                        warn!(id = %ev.id, camera = %ev.camera, "event clip failed");
+                    }
+                    cut = true;
+                }
+            }
+            if cut {
+                break;
+            }
+        }
     }
 }
 
