@@ -29,7 +29,7 @@ static uint8_t modbus_len = 0;
 volatile uint16_t feed_value = 0;
 volatile uint8_t feed_open = 0;
 
-static uint16_t modbus_crc(const uint8_t *data, uint8_t len)
+static uint16_t modbus_crc(const uint8_t *buf, uint8_t len)
 {
 	uint16_t crc = 0xFFFF;
 	uint8_t i;
@@ -37,7 +37,7 @@ static uint16_t modbus_crc(const uint8_t *data, uint8_t len)
 
 	for(i = 0; i < len; i++)
 	{
-		crc ^= data[i];
+		crc ^= buf[i];
 		for(j = 0; j < 8; j++)
 		{
 			if(crc & 0x0001)
