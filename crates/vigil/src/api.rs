@@ -75,6 +75,7 @@ async fn health_status(st: &AppState) -> HealthStatus {
         infer_connected: *st.infer_connected.read().await,
         uptime_secs: st.started.elapsed().as_secs(),
         feed_serial: vigil_modbus::serial_link().to_string(),
+        feed_in_secs: crate::feed::secs_until_next_feed(Utc::now()),
     }
 }
 

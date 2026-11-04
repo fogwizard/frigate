@@ -22,6 +22,29 @@ pub fn local_hour(now: DateTime<Utc>) -> u32 {
     now.with_timezone(&Local).hour()
 }
 
+/// Seconds until the next local 07:00. At 07:00 the next one is tomorrow.
+pub fn secs_until_next_feed(now: DateTime<Utc>) -> u64 {
+    let local = now.with_timezone(&Local);
+    let today = local.date_naive();
+    let opening = today
+        .and_hms_opt(WINDOW_HOUR, 0, 0)
+        .expect("07:00");
+    let target_naive = if local.naive_local() < opening {
+        opening
+    } else {
+        today
+            .succ_opt()
+            .expect("next day")
+            .and_hms_opt(WINDOW_HOUR, 0, 0)
+            .expect("07:00")
+    };
+    let target = Local
+        .from_local_datetime(&target_naive)
+        .earliest()
+        .unwrap_or_else(|| Utc.from_utc_datetime(&target_naive).with_timezone(&Local));
+    (target.with_timezone(&Utc) - now).num_seconds().max(0) as u64
+}
+
 /// Calendar date of the machine's local clock. The UTC date changes at 08:00
 /// in UTC+8, which is still the same local morning.
 pub fn local_date(now: DateTime<Utc>) -> NaiveDate {
@@ -765,6 +788,13 @@ fn at_hms(hour: u32, min: u32, sec: u32) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_feed_is_today_before_seven_and_tomorrow_after() {
+        assert_eq!(secs_until_next_feed(at_hms(6, 59, 0)), 60);
+        assert_eq!(secs_until_next_feed(at(7, 0)), 24 * 3600);
+        assert_eq!(secs_until_next_feed(at(8, 0)), 23 * 3600);
+    }
 
     #[test]
     fn opens_once_during_the_utc_hour_and_stops_after_it() {

@@ -44,6 +44,9 @@ pub struct HealthStatus {
     /// `unspecified`, `open_failed`, or `connected`.
     #[serde(default = "default_feed_serial")]
     pub feed_serial: String,
+    /// Seconds until the next local 07:00 feed.
+    #[serde(default)]
+    pub feed_in_secs: u64,
 }
 
 fn default_feed_serial() -> String {

@@ -104,6 +104,12 @@ document.querySelectorAll("nav button").forEach((btn) => {
   btn.addEventListener("click", () => switchPage(btn.dataset.page));
 });
 
+function formatCountdown(secs) {
+  const s = Math.max(0, Math.floor(Number(secs) || 0));
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+}
+
 async function refreshHealth() {
   const el = $("#health");
   try {
@@ -123,6 +129,8 @@ async function refreshHealth() {
       serial.textContent = label;
       serial.className = "health " + (state === "connected" ? "ok" : state === "open_failed" ? "bad" : "");
     }
+    const next = $("#feed-next");
+    if (next) next.textContent = "下次喂食倒计时：" + formatCountdown(j.health.feed_in_secs);
   } catch {
     el.textContent = "offline";
     el.className = "health bad";
@@ -131,6 +139,8 @@ async function refreshHealth() {
       serial.textContent = "";
       serial.className = "health";
     }
+    const next = $("#feed-next");
+    if (next) next.textContent = "";
   }
 }
 
