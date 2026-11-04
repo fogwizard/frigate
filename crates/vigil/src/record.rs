@@ -27,9 +27,8 @@ pub async fn segment_tracker_loop(cfg: Arc<Config>, db: Arc<Db>, camera: String)
 }
 
 /// Recording files whose filename time overlaps `[start, end]`.
-/// The segment table can miss a file that was replaced before the next poll,
-/// so clip building reads the directory instead.
-pub fn recordings_covering(camera_root: &Path, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<PathBuf> {
+#[cfg(test)]
+fn recordings_covering(camera_root: &Path, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<PathBuf> {
     let mut files = recording_files(camera_root, start, end);
     files.sort_by_key(|(t, _)| *t);
     let mut out = Vec::new();
@@ -78,6 +77,7 @@ fn index_recordings(db: &Db, camera: &str, camera_root: &Path) -> anyhow::Result
     Ok(())
 }
 
+#[cfg(test)]
 fn recording_files(camera_root: &Path, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<(DateTime<Utc>, PathBuf)> {
     let mut out = Vec::new();
     for day in day_span(start, end) {
@@ -99,6 +99,7 @@ fn recording_files(camera_root: &Path, start: DateTime<Utc>, end: DateTime<Utc>)
     out
 }
 
+#[cfg(test)]
 fn day_span(start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<NaiveDate> {
     let mut day = start.with_timezone(&Local).date_naive();
     let last = end.with_timezone(&Local).date_naive();
