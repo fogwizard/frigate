@@ -16,26 +16,47 @@ struct OpenPort {
 
 static PORT: Mutex<Option<OpenPort>> = Mutex::new(None);
 static LAST_SLAVE: AtomicU8 = AtomicU8::new(0);
+/// 0 = port not configured, 1 = last open failed, 2 = port is open.
+static LINK: AtomicU8 = AtomicU8::new(0);
+
+/// `unspecified` when `port` is empty, `open_failed` when the OS rejected it,
+/// `connected` while the port stays open.
+pub fn serial_link() -> &'static str {
+    match LINK.load(Ordering::SeqCst) {
+        2 => "connected",
+        1 => "open_failed",
+        _ => "unspecified",
+    }
+}
 
 /// Open the RTU port for the life of the process. An empty `port` leaves it closed.
-/// A later call replaces the previous port.
+/// A later call replaces the previous port. A failed open keeps the process up
+/// and records [`serial_link`] as `open_failed`.
 pub fn open_bus(port: &str, baud: u32) -> Result<(), Error> {
     let name = port.trim();
     if name.is_empty() {
         tracing::info!("modbus serial skipped (port empty)");
+        close_bus();
+        LINK.store(0, Ordering::SeqCst);
         return Ok(());
     }
     let timeout = response_timeout(baud);
-    let io = serialport::new(name, baud)
+    let io = match serialport::new(name, baud)
         .timeout(timeout)
         .data_bits(serialport::DataBits::Eight)
         .parity(serialport::Parity::None)
         .stop_bits(serialport::StopBits::One)
         .open()
-        .map_err(|e| Error::Serial {
-            port: name.to_string(),
-            message: e.to_string(),
-        })?;
+    {
+        Ok(io) => io,
+        Err(e) => {
+            LINK.store(1, Ordering::SeqCst);
+            return Err(Error::Serial {
+                port: name.to_string(),
+                message: e.to_string(),
+            });
+        }
+    };
     let mut slot = PORT.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(prev) = slot.take() {
         tracing::info!(port = %prev.name, "modbus serial close");
@@ -50,6 +71,7 @@ pub fn open_bus(port: &str, baud: u32) -> Result<(), Error> {
         name: name.to_string(),
         io,
     });
+    LINK.store(2, Ordering::SeqCst);
     Ok(())
 }
 
@@ -352,6 +374,15 @@ mod tests {
         assert_eq!(response_timeout(9600), Duration::from_millis(500));
         assert_eq!(response_timeout(19200), Duration::from_millis(250));
         assert_eq!(response_timeout(4800), Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn empty_port_is_unspecified_and_a_missing_port_fails_open() {
+        open_bus("", 9600).unwrap();
+        assert_eq!(serial_link(), "unspecified");
+        let err = open_bus("COM199", 9600).unwrap_err();
+        assert!(err.to_string().contains("COM199"));
+        assert_eq!(serial_link(), "open_failed");
     }
 
     #[test]

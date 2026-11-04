@@ -41,6 +41,13 @@ pub struct HealthStatus {
     pub cameras: usize,
     pub infer_connected: bool,
     pub uptime_secs: u64,
+    /// `unspecified`, `open_failed`, or `connected`.
+    #[serde(default = "default_feed_serial")]
+    pub feed_serial: String,
+}
+
+fn default_feed_serial() -> String {
+    "unspecified".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

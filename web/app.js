@@ -112,9 +112,25 @@ async function refreshHealth() {
     const infer = j.health.infer_connected ? "infer✓" : "infer✗";
     el.textContent = `v${j.health.version} · ${j.health.cameras} cams · ${infer} · up ${j.health.uptime_secs}s`;
     el.className = "health " + (j.health.ok ? "ok" : "bad");
+    const serial = $("#feed-serial");
+    if (serial) {
+      const state = j.health.feed_serial || "unspecified";
+      const label = {
+        unspecified: "串口未指定",
+        open_failed: "串口打开异常",
+        connected: "串口已连接",
+      }[state] || "串口未指定";
+      serial.textContent = label;
+      serial.className = "health " + (state === "connected" ? "ok" : state === "open_failed" ? "bad" : "");
+    }
   } catch {
     el.textContent = "offline";
     el.className = "health bad";
+    const serial = $("#feed-serial");
+    if (serial) {
+      serial.textContent = "";
+      serial.className = "health";
+    }
   }
 }
 

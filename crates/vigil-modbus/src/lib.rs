@@ -14,7 +14,9 @@ pub use codec::{
     request_write_multiple_registers, request_write_single_coil, request_write_single_register,
     Error, Exception, Function, Response, Result,
 };
-pub use master::{close_bus, last_slave, open_bus, response_timeout, write_feed, Bus};
+pub use master::{
+    close_bus, last_slave, open_bus, response_timeout, serial_link, write_feed, Bus,
+};
 
 /// Function codes this crate implements.
 pub mod function {

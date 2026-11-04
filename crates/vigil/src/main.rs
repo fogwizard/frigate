@@ -98,7 +98,9 @@ async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
     std::fs::create_dir_all(cfg.snapshots_dir())?;
     std::fs::create_dir_all(cfg.live_snapshots_dir())?;
 
-    vigil_modbus::open_bus(&cfg.feed.port, cfg.feed.baud).context("open modbus serial")?;
+    if let Err(e) = vigil_modbus::open_bus(&cfg.feed.port, cfg.feed.baud) {
+        warn!(error = %e, port = %cfg.feed.port, "modbus serial open failed");
+    }
     let _close_serial = CloseSerial;
 
     let db = Arc::new(db::Db::open(&cfg.paths.db_path)?);
