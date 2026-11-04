@@ -3,46 +3,150 @@
 /**************************************************************
 说明：
 1、Options for Target‘Target1’：BL51 Locate->Code Range:0x100，烧录选项请选择DISRST，复位脚作为普通IO使用；
-2、改变TEST的定义，可以分别测试对应的功能；
-3、注意：先在Function.H里面选择测试型号（SC92F7420无LCD/LED和PWM功能）
+2、串口1按 SSI1_Test 的 Uart1 方式初始化，9600 8N1，解析喂食器主机下发的 Modbus RTU；
+3、两块板的从站地址用下面的宏区分，本板使用 MODBUS_SLAVE_ADDR。
 ***************************************************************/
-#define Test  6    //BTM:0 EXTI:1 Timer:2 LCD:3 PWM:4 SSI0:5 SSI0:6 ADC:7 IAP:8 
+
+/* 第一块喂食器从站 */
+#define MODBUS_SLAVE_ADDR_1  0x01
+/* 第二块喂食器从站 */
+#define MODBUS_SLAVE_ADDR_2  0x02
+/* 本板地址。第二块板改成 MODBUS_SLAVE_ADDR_2 */
+#define MODBUS_SLAVE_ADDR    MODBUS_SLAVE_ADDR_1
+
+#define MODBUS_FC_WRITE_COIL      0x05
+#define MODBUS_FC_WRITE_REGISTER  0x06
+#define MODBUS_FRAME_LEN          8
+#define FEED_REG_ADDRESS          0x0000
+
+extern void Uart1_Init(uint Freq, unsigned long int baud);
+extern bit Uart1SendFlag;
+extern bit Uart1_Read(uint8_t *dat);
+
+static uint8_t modbus_frame[MODBUS_FRAME_LEN];
+static uint8_t modbus_len = 0;
+/* 最近一次写到寄存器 0 的值。feed_open 非 0 表示打开喂食器。 */
+volatile uint16_t feed_value = 0;
+volatile uint8_t feed_open = 0;
+
+static uint16_t modbus_crc(const uint8_t *data, uint8_t len)
+{
+	uint16_t crc = 0xFFFF;
+	uint8_t i;
+	uint8_t j;
+
+	for(i = 0; i < len; i++)
+	{
+		crc ^= data[i];
+		for(j = 0; j < 8; j++)
+		{
+			if(crc & 0x0001)
+			{
+				crc = (crc >> 1) ^ 0xA001;
+			}
+			else
+			{
+				crc >>= 1;
+			}
+		}
+	}
+	return crc;
+}
+
+static void uart1_send(const uint8_t *buf, uint8_t len)
+{
+	uint8_t i;
+
+	for(i = 0; i < len; i++)
+	{
+		SS1DAT = buf[i];
+		while(!Uart1SendFlag);
+		Uart1SendFlag = 0;
+	}
+}
+
+/* 功能码 0x06：写单个寄存器，value=1 打开，value=0 关闭。
+   功能码 0x05：写单个线圈，0xFF00 打开，0x0000 关闭。
+   地址匹配且 CRC 正确时回显 8 字节，主机据此确认写入。 */
+static void modbus_on_frame(void)
+{
+	uint16_t crc;
+	uint16_t address;
+	uint16_t value;
+	uint8_t function;
+
+	crc = modbus_frame[6] | ((uint16_t)modbus_frame[7] << 8);
+	if(crc != modbus_crc(modbus_frame, 6))
+	{
+		return;
+	}
+	if(modbus_frame[0] != MODBUS_SLAVE_ADDR)
+	{
+		modbus_len = 0;
+		return;
+	}
+	function = modbus_frame[1];
+	if(function != MODBUS_FC_WRITE_COIL && function != MODBUS_FC_WRITE_REGISTER)
+	{
+		modbus_len = 0;
+		return;
+	}
+
+	address = ((uint16_t)modbus_frame[2] << 8) | modbus_frame[3];
+	value = ((uint16_t)modbus_frame[4] << 8) | modbus_frame[5];
+	if(address == FEED_REG_ADDRESS)
+	{
+		if(function == MODBUS_FC_WRITE_COIL)
+		{
+			feed_open = (value == 0xFF00) ? 1 : 0;
+			feed_value = feed_open;
+		}
+		else
+		{
+			feed_value = value;
+			feed_open = (value != 0) ? 1 : 0;
+		}
+	}
+	uart1_send(modbus_frame, MODBUS_FRAME_LEN);
+	modbus_len = 0;
+}
+
+static void modbus_push(uint8_t byte)
+{
+	uint8_t i;
+
+	if(modbus_len < MODBUS_FRAME_LEN)
+	{
+		modbus_frame[modbus_len++] = byte;
+	}
+	else
+	{
+		for(i = 0; i < MODBUS_FRAME_LEN - 1; i++)
+		{
+			modbus_frame[i] = modbus_frame[i + 1];
+		}
+		modbus_frame[MODBUS_FRAME_LEN - 1] = byte;
+	}
+	if(modbus_len == MODBUS_FRAME_LEN)
+	{
+		modbus_on_frame();
+	}
+}
 
 void main(void)
 {
-  IO_Init();
-  WDTCON |= 0x10;		    //清看门狗
-  switch(Test)
-  {
-    case 0:
-      BTM_Test();
-      break;
-    case 1:
-      EXTI_Test();
-      break;
-    case 2:
-      Timer_Test();
-      break;
-    case 3:
-      LCD_Test();
-      break;
-    case 4:
-      PWM_Test();
-      break;
-    case 5:
-      SSI0_Test();
-      break;
-    case 6:
-      SSI1_Test();
-      break;
-    case 7:
-      ADC_Test();
-      break;
-    case 8:
-      IAP_Test(0x1fff, IapROM);  //操作ROM，对地址0x1fff进行读写测试
-//		        IAP_Test(0x7f,IapEPPROM);   //操作EPPROM，对地址0x7f进行读写测试
-      break;
-    default:
-      break;
-  }
+	uint8_t byte;
+
+	IO_Init();
+	WDTCON |= 0x10;
+	Uart1_Init(16, 9600);
+
+	while(1)
+	{
+		WDTCON |= 0x10;
+		if(Uart1_Read(&byte))
+		{
+			modbus_push(byte);
+		}
+	}
 }
