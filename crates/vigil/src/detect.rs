@@ -297,6 +297,7 @@ async fn tick_feed(
                 Ok(()) => tracing::info!(%camera, slave, "feeder opened"),
                 Err(e) => {
                     warn!(%camera, error = %e, "feeder open failed");
+                    crate::feed::record_open_failure(now);
                     if db.delete_event(id).is_err() {
                         let _ = db.update_event_note(id, "失败：开启喂食器失败", 0.0);
                     }

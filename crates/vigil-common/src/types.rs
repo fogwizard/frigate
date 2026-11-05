@@ -50,6 +50,9 @@ pub struct HealthStatus {
     /// 07:00–08:00 and at least one feeder still has no 成功 note.
     #[serde(default)]
     pub feed_trying: bool,
+    /// Failed open writes since local midnight. Shown while `feed_trying` is set.
+    #[serde(default)]
+    pub feed_retries: u32,
 }
 
 fn default_feed_serial() -> String {

@@ -6,10 +6,11 @@
 //! Closing is retried until the write succeeds, including after a restart.
 
 use crate::db::Db;
-use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::process::Command;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -17,14 +18,17 @@ use vigil_common::{Config, Event};
 
 const WINDOW_HOUR: u32 = 7;
 
+static OPEN_FAILURES: AtomicU32 = AtomicU32::new(0);
+static FAILURE_DAY: Mutex<i32> = Mutex::new(0);
+
 /// Hour of the machine's local clock. The feed window is 07:00–08:00 there.
 pub fn local_hour(now: DateTime<Utc>) -> u32 {
     now.with_timezone(&Local).hour()
 }
 
-/// During 07:00–08:00 the header says 喂食当中 until every feeder's note starts
-/// with 成功. Before 07:00, after 08:00, and once they have all succeeded, the
-/// countdown is shown again. An empty list means no feeder is configured.
+/// During 07:00–08:00 the header shows the retry count until every feeder's note
+/// starts with 成功. Before 07:00, after 08:00, and once they have all succeeded,
+/// the countdown is shown again. An empty list means no feeder is configured.
 pub fn show_feeding_message(hour: u32, succeeded: &[bool]) -> bool {
     hour == WINDOW_HOUR && succeeded.iter().any(|ok| !*ok)
 }
@@ -50,6 +54,28 @@ pub fn secs_until_next_feed(now: DateTime<Utc>) -> u64 {
         .earliest()
         .unwrap_or_else(|| Utc.from_utc_datetime(&target_naive).with_timezone(&Local));
     (target.with_timezone(&Utc) - now).num_seconds().max(0) as u64
+}
+
+/// Failed open writes today. The count resets when the local date changes.
+pub fn record_open_failure(now: DateTime<Utc>) {
+    let day = local_date(now).num_days_from_ce();
+    let mut slot = FAILURE_DAY.lock().unwrap_or_else(|err| err.into_inner());
+    if *slot != day {
+        *slot = day;
+        OPEN_FAILURES.store(1, Ordering::SeqCst);
+    } else {
+        OPEN_FAILURES.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+pub fn open_failure_count(now: DateTime<Utc>) -> u32 {
+    let day = local_date(now).num_days_from_ce();
+    let slot = FAILURE_DAY.lock().unwrap_or_else(|err| err.into_inner());
+    if *slot != day {
+        0
+    } else {
+        OPEN_FAILURES.load(Ordering::SeqCst)
+    }
 }
 
 /// True while the 07:00–08:00 attempt is still short of a 成功 note on any feeder.
@@ -822,6 +848,23 @@ mod tests {
         assert!(!show_feeding_message(7, &[true, true]));
         assert!(!show_feeding_message(7, &[]));
         assert!(!show_feeding_message(8, &[false]));
+    }
+
+    #[test]
+    fn open_failures_restart_on_the_next_local_day() {
+        let today = at(7, 10);
+        let before = open_failure_count(today);
+        record_open_failure(today);
+        record_open_failure(today);
+        assert_eq!(open_failure_count(today), before + 2);
+        let tomorrow = Local
+            .with_ymd_and_hms(2026, 10, 24, 7, 10, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(open_failure_count(tomorrow), 0);
+        record_open_failure(tomorrow);
+        assert_eq!(open_failure_count(tomorrow), 1);
+        assert_eq!(open_failure_count(today), 0);
     }
 
     #[test]

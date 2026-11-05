@@ -133,7 +133,7 @@ async function refreshHealth() {
     if (next) {
       next.className = "health ok";
       next.textContent = j.health.feed_trying
-        ? "喂食当中..."
+        ? "尝试喂食，重试次数：" + (j.health.feed_retries || 0)
         : "下次喂食倒计时：" + formatCountdown(j.health.feed_in_secs);
     }
   } catch {

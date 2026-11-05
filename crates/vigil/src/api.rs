@@ -77,6 +77,7 @@ async fn health_status(st: &AppState) -> HealthStatus {
         feed_serial: vigil_modbus::serial_link().to_string(),
         feed_in_secs: crate::feed::secs_until_next_feed(Utc::now()),
         feed_trying: crate::feed::feeding_in_progress(&st.cfg, &st.db, Utc::now()),
+        feed_retries: crate::feed::open_failure_count(Utc::now()),
     }
 }
 
