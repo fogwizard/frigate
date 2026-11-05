@@ -130,7 +130,12 @@ async function refreshHealth() {
       serial.className = "health " + (state === "connected" ? "ok" : state === "open_failed" ? "bad" : "");
     }
     const next = $("#feed-next");
-    if (next) next.textContent = "下次喂食倒计时：" + formatCountdown(j.health.feed_in_secs);
+    if (next) {
+      next.className = "health ok";
+      next.textContent = j.health.feed_trying
+        ? "喂食当中..."
+        : "下次喂食倒计时：" + formatCountdown(j.health.feed_in_secs);
+    }
   } catch {
     el.textContent = "offline";
     el.className = "health bad";

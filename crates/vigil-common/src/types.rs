@@ -47,6 +47,9 @@ pub struct HealthStatus {
     /// Seconds until the next local 07:00 feed.
     #[serde(default)]
     pub feed_in_secs: u64,
+    /// 07:00–08:00 and at least one feeder still has no 成功 note.
+    #[serde(default)]
+    pub feed_trying: bool,
 }
 
 fn default_feed_serial() -> String {

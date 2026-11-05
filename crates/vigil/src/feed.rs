@@ -22,6 +22,13 @@ pub fn local_hour(now: DateTime<Utc>) -> u32 {
     now.with_timezone(&Local).hour()
 }
 
+/// During 07:00–08:00 the header says 喂食当中 until every feeder's note starts
+/// with 成功. Before 07:00, after 08:00, and once they have all succeeded, the
+/// countdown is shown again. An empty list means no feeder is configured.
+pub fn show_feeding_message(hour: u32, succeeded: &[bool]) -> bool {
+    hour == WINDOW_HOUR && succeeded.iter().any(|ok| !*ok)
+}
+
 /// Seconds until the next local 07:00. At 07:00 the next one is tomorrow.
 pub fn secs_until_next_feed(now: DateTime<Utc>) -> u64 {
     let local = now.with_timezone(&Local);
@@ -43,6 +50,24 @@ pub fn secs_until_next_feed(now: DateTime<Utc>) -> u64 {
         .earliest()
         .unwrap_or_else(|| Utc.from_utc_datetime(&target_naive).with_timezone(&Local));
     (target.with_timezone(&Utc) - now).num_seconds().max(0) as u64
+}
+
+/// True while the 07:00–08:00 attempt is still short of a 成功 note on any feeder.
+pub fn feeding_in_progress(cfg: &Config, db: &Db, now: DateTime<Utc>) -> bool {
+    let day = local_date(now);
+    let succeeded: Vec<bool> = cfg
+        .cameras
+        .iter()
+        .filter(|(_, cam)| cam.feed_time > 0)
+        .map(|(camera, _)| {
+            db.latest_feed_event(camera, day)
+                .ok()
+                .flatten()
+                .and_then(|ev| ev.note)
+                .is_some_and(|note| note.starts_with("成功"))
+        })
+        .collect();
+    show_feeding_message(local_hour(now), &succeeded)
 }
 
 /// Calendar date of the machine's local clock. The UTC date changes at 08:00
@@ -788,6 +813,16 @@ fn at_hms(hour: u32, min: u32, sec: u32) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_says_feeding_until_every_feeder_succeeds() {
+        assert!(!show_feeding_message(6, &[false]));
+        assert!(show_feeding_message(7, &[false, false]));
+        assert!(show_feeding_message(7, &[true, false]));
+        assert!(!show_feeding_message(7, &[true, true]));
+        assert!(!show_feeding_message(7, &[]));
+        assert!(!show_feeding_message(8, &[false]));
+    }
 
     #[test]
     fn next_feed_is_today_before_seven_and_tomorrow_after() {
