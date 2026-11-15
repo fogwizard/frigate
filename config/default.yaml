@@ -22,8 +22,9 @@ openvino:
   model: models/yolo11n.onnx
 
 ffmpeg:
-  # 改成你的 ffmpeg 路径；须能拉到下方 cameras 的 RTSP 才有画面
-  binary: "D:/adb/ffmpeg/bin/ffmpeg.exe"
+  # 改成你的 ffmpeg 路径；须能拉到下方 cameras 的 RTSP 才有画面。
+  # macOS 一般是 PATH 上的 ffmpeg（brew install ffmpeg）。
+  binary: ffmpeg
 
 infer:
   # Linux production: /run/vigil/infer.sock
@@ -38,15 +39,16 @@ infer:
 
 # USB 摄像头测试：enabled: true 后，指定 camera 用本机摄像头代替 RTSP。
 # Windows 列设备: ffmpeg -list_devices true -f dshow -i dummy
+# macOS 列设备:   ffmpeg -f avfoundation -list_devices true -i ""
 # Linux 列设备:   ls /dev/video*  或  v4l2-ctl --list-devices
 usb:
   enabled: false
-  device: "HP 5MP Camera"
+  device: "0"
   camera: cam1
   width: 640
   height: 480
   fps: 15
-  backend: dshow
+  backend: avfoundation
   # 推到 go2rtc。vigil 启动时会先把 go2rtc 拉起来。
   restream: true
   # true = 只开 USB 这一路，跳过其它占位 RTSP
@@ -111,7 +113,7 @@ web:
 # See packaging/go2rtc.yaml and packaging/nginx-flv.conf.example
 # 本机能找到 go2rtc 就拉起；找不到则打印远程启动命令，由另一台机器执行。工作目录是项目根目录。
 go2rtc:
-  binary: "D:/adb/go2rtc.exe"
+  binary: go2rtc
   config: packaging/go2rtc.yaml
   api: "127.0.0.1:1984"
 

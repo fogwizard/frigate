@@ -126,7 +126,14 @@ fn locate_binary(configured: &str, cwd: &Path) -> Option<PathBuf> {
         return Some(candidate);
     }
     let name = path.file_name().unwrap_or(OsStr::new("go2rtc"));
-    find_on_path(name)
+    if let Some(found) = find_on_path(name) {
+        return Some(found);
+    }
+    #[cfg(not(windows))]
+    if let Some(stripped) = name.to_str().and_then(|s| s.strip_suffix(".exe")) {
+        return find_on_path(OsStr::new(stripped));
+    }
+    None
 }
 
 fn find_on_path(name: &OsStr) -> Option<PathBuf> {
@@ -183,11 +190,19 @@ mod tests {
 
     #[test]
     fn config_path_is_under_the_project_directory() {
-        let cwd = Path::new(r"C:\work\frigate");
+        let cwd = Path::new(if cfg!(windows) {
+            r"C:\work\frigate"
+        } else {
+            "/work/frigate"
+        });
         let got = resolve_under(cwd, "packaging/go2rtc.yaml");
         assert_eq!(got, cwd.join("packaging/go2rtc.yaml"));
-        let abs = Path::new(r"D:\cfg\go2rtc.yaml");
-        assert_eq!(resolve_under(cwd, abs.to_str().unwrap()), abs);
+        let abs = if cfg!(windows) {
+            r"D:\cfg\go2rtc.yaml"
+        } else {
+            "/cfg/go2rtc.yaml"
+        };
+        assert_eq!(resolve_under(cwd, abs), Path::new(abs));
     }
 
     #[test]

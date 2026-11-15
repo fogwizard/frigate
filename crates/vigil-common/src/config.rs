@@ -278,12 +278,13 @@ pub struct WebhookConfig {
 /// Use a local USB webcam instead of RTSP (dev / demo).
 ///
 /// Windows: DirectShow (`ffmpeg -list_devices true -f dshow -i dummy`).
+/// macOS: AVFoundation (`ffmpeg -f avfoundation -list_devices true -i ""`).
 /// Linux: V4L2 (`/dev/video0`, or `v4l2-ctl --list-devices`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsbConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// Camera name (Windows) or device path (Linux, e.g. `/dev/video0`).
+    /// Camera name (Windows), index or name (macOS, e.g. `0`), or device path (Linux, e.g. `/dev/video0`).
     #[serde(default)]
     pub device: String,
     /// Which configured camera id receives the USB feed.
@@ -296,7 +297,7 @@ pub struct UsbConfig {
     pub height: u32,
     #[serde(default = "default_usb_fps")]
     pub fps: f32,
-    /// Force backend: `dshow` | `v4l2` | empty = auto by OS / device path.
+    /// Force backend: `dshow` | `avfoundation` | `v4l2` | empty = auto by OS / device path.
     #[serde(default)]
     pub backend: String,
     /// Publish USB cam to go2rtc (needs :8554 up). Default off — a dead restream
@@ -342,13 +343,15 @@ impl UsbConfig {
         self.enabled && !self.device.trim().is_empty() && self.camera == camera
     }
 
-    /// Resolved capture backend: `dshow` or `v4l2`.
+    /// Resolved capture backend: `dshow`, `avfoundation`, or `v4l2`.
     pub fn resolved_backend(&self) -> &'static str {
         match self.backend.trim().to_ascii_lowercase().as_str() {
             "dshow" | "directshow" => "dshow",
+            "avfoundation" | "avf" => "avfoundation",
             "v4l2" | "v4l" => "v4l2",
             _ if self.device.starts_with("/dev/") => "v4l2",
             _ if cfg!(windows) => "dshow",
+            _ if cfg!(target_os = "macos") => "avfoundation",
             _ => "v4l2",
         }
     }
@@ -732,8 +735,11 @@ impl Config {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading config {}", path.display()))?;
-        let cfg: Config = serde_yaml::from_str(&text)
+        let mut cfg: Config = serde_yaml::from_str(&text)
             .with_context(|| format!("parsing config {}", path.display()))?;
+        cfg.ffmpeg.binary = crate::paths::resolve_tool(&cfg.ffmpeg.binary);
+        cfg.go2rtc.binary = crate::paths::resolve_tool(&cfg.go2rtc.binary);
+        cfg.infer.binary = crate::paths::resolve_tool(&cfg.infer.binary);
         Ok(cfg)
     }
 

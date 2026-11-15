@@ -122,7 +122,6 @@ async fn serve_unix(endpoint: &str, app: Arc<App>) -> anyhow::Result<()> {
     }
     let _ = std::fs::remove_file(endpoint);
     let listener = UnixListener::bind(endpoint)
-        .await
         .with_context(|| format!("bind unix {endpoint}"))?;
     info!(%endpoint, "vigil-infer listening (unix)");
     loop {

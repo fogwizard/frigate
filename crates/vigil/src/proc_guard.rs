@@ -1,12 +1,15 @@
 //! Keep ffmpeg / sidecar children tied to the vigil process lifetime.
 //!
 //! - Windows: Job Object with KILL_ON_JOB_CLOSE (OS kills children when vigil exits).
-//! - Unix: PR_SET_PDEATHSIG so children get SIGTERM when parent dies.
+//! - Linux: PR_SET_PDEATHSIG so children get SIGTERM when the parent dies.
+//! - macOS: a kqueue watcher (no PDEATHSIG) that signals the child when vigil exits.
 //! - All platforms: PID registry + explicit kill on graceful shutdown.
 
 use std::collections::HashSet;
 use std::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::debug;
+#[cfg(windows)]
+use tracing::warn;
 
 static TRACKED_PIDS: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
@@ -74,9 +77,9 @@ fn force_kill_pid(pid: u32) {
     debug!(pid, "force-killed child");
 }
 
-/// Configure `Command` so the child exits when vigil dies (Unix PDEATHSIG).
+/// Configure `Command` so the child exits when vigil dies.
 pub fn apply_spawn_hooks(cmd: &mut tokio::process::Command) {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
         unsafe {
@@ -93,7 +96,83 @@ pub fn apply_spawn_hooks(cmd: &mut tokio::process::Command) {
             });
         }
     }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        cmd.pre_exec(macos_parent_death_watch);
+    }
     let _ = cmd;
+}
+
+/// macOS has no `PR_SET_PDEATHSIG`. After `Command` forks, fork once more:
+/// the grandchild waits on `kqueue` and signals the child that is about to `exec`
+/// when the original parent (vigil) exits. Inherited fds are closed so the
+/// watcher does not keep ffmpeg's pipes open.
+#[cfg(target_os = "macos")]
+fn macos_parent_death_watch() -> std::io::Result<()> {
+    let vigil = unsafe { libc::getppid() };
+    if vigil == 1 {
+        unsafe { libc::raise(libc::SIGTERM) };
+        return Ok(());
+    }
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if pid > 0 {
+        if unsafe { libc::getppid() } == 1 {
+            unsafe { libc::raise(libc::SIGTERM) };
+        }
+        return Ok(());
+    }
+
+    unsafe {
+        for fd in 0..64 {
+            libc::close(fd);
+        }
+        let target = libc::getppid();
+        let kq = libc::kqueue();
+        if kq >= 0 {
+            let mut changes = [
+                libc::kevent {
+                    ident: vigil as libc::uintptr_t,
+                    filter: libc::EVFILT_PROC,
+                    flags: libc::EV_ADD | libc::EV_ENABLE,
+                    fflags: libc::NOTE_EXIT,
+                    data: 0,
+                    udata: std::ptr::null_mut(),
+                },
+                libc::kevent {
+                    ident: target as libc::uintptr_t,
+                    filter: libc::EVFILT_PROC,
+                    flags: libc::EV_ADD | libc::EV_ENABLE,
+                    fflags: libc::NOTE_EXIT,
+                    data: 0,
+                    udata: std::ptr::null_mut(),
+                },
+            ];
+            libc::kevent(
+                kq,
+                changes.as_mut_ptr(),
+                2,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            );
+            let mut fired: libc::kevent = std::mem::zeroed();
+            libc::kevent(kq, std::ptr::null(), 0, &mut fired, 1, std::ptr::null());
+            if fired.ident == vigil as libc::uintptr_t {
+                libc::kill(target, libc::SIGTERM);
+                let ts = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 200_000_000,
+                };
+                libc::nanosleep(&ts, std::ptr::null_mut());
+                libc::kill(target, libc::SIGKILL);
+            }
+            libc::close(kq);
+        }
+        libc::_exit(0);
+    }
 }
 
 #[cfg(windows)]

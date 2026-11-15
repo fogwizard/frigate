@@ -245,7 +245,7 @@ fn push_dahua_rtsp_input_args(args: &mut Vec<String>, source: &str) {
 
 fn push_usb_input_args(args: &mut Vec<String>, usb: &UsbConfig) {
     let backend = usb.resolved_backend();
-    if backend == "dshow" {
+    if backend == "dshow" || backend == "avfoundation" {
         // A 100MB queue held ~10s of frames, so the live picture lagged behind the room.
         // ~1s is enough to ride out a short encode stall without showing an old hand.
         args.extend([
@@ -253,13 +253,15 @@ fn push_usb_input_args(args: &mut Vec<String>, usb: &UsbConfig) {
             "nobuffer".into(),
             "-flags".into(),
             "low_delay".into(),
-            "-rtbufsize".into(),
-            "8M".into(),
         ]);
+    }
+    if backend == "dshow" {
+        args.extend(["-rtbufsize".into(), "8M".into()]);
     }
     args.push("-f".into());
     args.push(backend.into());
     // nv12 is cheaper than yuyv422 on most Windows webcams.
+    // AVFoundation picks the camera's native format; forcing nv12 fails on many Macs.
     if backend == "dshow" {
         args.extend(["-pixel_format".into(), "nv12".into()]);
     }
@@ -274,7 +276,19 @@ fn push_usb_input_args(args: &mut Vec<String>, usb: &UsbConfig) {
     args.push("-i".into());
     match backend {
         "dshow" => args.push(format!("video={}", usb.device.trim())),
+        "avfoundation" => args.push(avfoundation_device(usb.device.trim())),
         _ => args.push(usb.device.trim().to_string()),
+    }
+}
+
+/// AVFoundation input is `video:audio`. `:none` skips the microphone so a missing
+/// audio device does not fail the video capture.
+fn avfoundation_device(device: &str) -> String {
+    let dev = if device.is_empty() { "0" } else { device };
+    if dev.contains(':') {
+        dev.to_string()
+    } else {
+        format!("{dev}:none")
     }
 }
 
@@ -595,8 +609,42 @@ mod tests {
         };
         #[cfg(windows)]
         assert_eq!(u.resolved_backend(), "dshow");
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        assert_eq!(u.resolved_backend(), "avfoundation");
+        #[cfg(all(unix, not(target_os = "macos")))]
         assert_eq!(u.resolved_backend(), "v4l2");
+    }
+
+    #[test]
+    fn usb_input_args_avfoundation() {
+        let u = UsbConfig {
+            enabled: true,
+            device: "0".into(),
+            width: 640,
+            height: 480,
+            fps: 15.0,
+            backend: "avfoundation".into(),
+            ..Default::default()
+        };
+        let mut args = Vec::new();
+        push_usb_input_args(&mut args, &u);
+        assert_eq!(
+            args,
+            vec![
+                "-fflags",
+                "nobuffer",
+                "-flags",
+                "low_delay",
+                "-f",
+                "avfoundation",
+                "-video_size",
+                "640x480",
+                "-framerate",
+                "15",
+                "-i",
+                "0:none",
+            ]
+        );
     }
 
     #[test]
