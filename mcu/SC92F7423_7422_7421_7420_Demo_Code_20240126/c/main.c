@@ -115,7 +115,7 @@ static void modbus_push(uint8_t byte)
 {
 	uint8_t i;
 
-	if(modbus_len < MODBUS_FRAME_LEN)
+	if(modbus_len < MODBUS_FRAME_LEN)e
 	{
 		modbus_frame[modbus_len++] = byte;
 	}
