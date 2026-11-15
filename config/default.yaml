@@ -115,19 +115,19 @@ web:
 go2rtc:
   binary: go2rtc
   config: packaging/go2rtc.yaml
-  api: "127.0.0.1:1984"
+  api: "122.51.106.239:1984"
 
 stream:
   enabled: true
-  # 推流到本机 go2rtc。进程没起来时由上面的 go2rtc 段自动启动。
+  # 推流到服务器上的 go2rtc。8554 不通时整路 ffmpeg 会退出，页面就没有画面。
   restream: true
   # Must match go2rtc rtsp.listen + stream name (publisher)
-  publish_url_template: "rtsp://127.0.0.1:8554/{camera}"
+  publish_url_template: "rtsp://122.51.106.239:8554/{camera}"
   # Nginx maps /{camera}.flv → go2rtc /api/stream.flv?src={camera}
   public_base: "https://stream.example.com"
   path_template: "/{camera}"
   # 小程序 live-player 使用的地址，与 ffplay 验证过的 go2rtc HTTP-FLV 一致
-  play_url_template: "http://127.0.0.1:1984/api/stream.flv?src={camera}"
+  play_url_template: "http://122.51.106.239:1984/api/stream.flv?src={camera}"
   sign_secret: "change-me"
   sign_ttl_secs: 120
 
