@@ -1,7 +1,7 @@
 //! One long-lived FFmpeg per camera: segment recording + continuous raw RGB24 on stdout.
 
 use crate::db::Db;
-use crate::detect::DetectJob;
+use crate::detect::{CameraStatusMap, DetectJob};
 use crate::proc_guard;
 use crate::record;
 use anyhow::{Context, Result};
@@ -49,6 +49,7 @@ pub async fn run_all_cameras(
     db: Arc<Db>,
     ring: Arc<FrameRing>,
     detect_tx: mpsc::Sender<DetectJob>,
+    statuses: CameraStatusMap,
 ) {
     if cfg.usb.enabled && cfg.usb.device.trim().is_empty() {
         warn!("usb.enabled but device is empty — USB mode skipped");
@@ -100,8 +101,9 @@ pub async fn run_all_cameras(
         let ring = ring.clone();
         let camera = name.clone();
         let tx = detect_tx.clone();
+        let statuses = statuses.clone();
         tokio::spawn(async move {
-            run_combined(cfg, db, ring, camera, source, kind, tx).await;
+            run_combined(cfg, db, ring, camera, source, kind, tx, statuses).await;
         });
     }
 }
@@ -114,12 +116,25 @@ async fn run_combined(
     source: String,
     kind: SourceKind,
     tx: mpsc::Sender<DetectJob>,
+    statuses: CameraStatusMap,
 ) {
     let mut backoff = 1u64;
+    let mut logged_down = false;
     let live_dir = cfg.live_snapshots_dir();
     let _ = std::fs::create_dir_all(&live_dir);
 
     loop {
+        if matches!(kind, SourceKind::Rtsp) && !rtsp_tcp_ready(&source).await {
+            set_streaming(&statuses, &camera, false).await;
+            if !logged_down {
+                warn!(camera = %camera, "camera unreachable, waiting for the network");
+                logged_down = true;
+            }
+            sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        logged_down = false;
+
         match spawn_combined_ffmpeg(&cfg, &db, &camera, &source, &kind).await {
             Ok(mut child) => {
                 let do_restream = restream_enabled(&cfg, &kind);
@@ -131,7 +146,7 @@ async fn run_combined(
                     "ffmpeg started (record+raw detect{})",
                     if do_restream { "+restream" } else { "" }
                 );
-                backoff = 1;
+                let saw_frame = Arc::new(AtomicBool::new(false));
                 let Some(stdout) = child.stdout.take() else {
                     warn!(camera = %camera, "no stdout pipe");
                     let _ = child.kill().await;
@@ -149,6 +164,8 @@ async fn run_combined(
                     stdout,
                     tx.clone(),
                     clock.clone(),
+                    statuses.clone(),
+                    saw_frame.clone(),
                 );
                 let tracker =
                     record::segment_tracker_loop(cfg.clone(), db.clone(), camera.clone());
@@ -184,6 +201,12 @@ async fn run_combined(
                 }
                 if let Some(pid) = child_pid {
                     proc_guard::untrack_pid(pid);
+                }
+                set_streaming(&statuses, &camera, false).await;
+                if saw_frame.load(Ordering::Relaxed) {
+                    backoff = 1;
+                } else {
+                    backoff = (backoff * 2).min(8);
                 }
             }
             Err(e) => error!(camera = %camera, error = %e, "spawn ffmpeg"),
@@ -500,6 +523,54 @@ async fn publisher_alive(api: &str, camera: &str) -> Option<bool> {
     Some(publishers_present(&body, camera))
 }
 
+/// Host and port of an RTSP URL. Missing port means 554.
+fn rtsp_endpoint(url: &str) -> Option<(String, u16)> {
+    let rest = url.split_once("://")?.1;
+    let hostport = rest.split(['/', '?']).next()?;
+    let hostport = hostport.rsplit('@').next()?;
+    if let Some((host, port)) = hostport.rsplit_once(':') {
+        if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
+            return Some((host.to_string(), port.parse().ok()?));
+        }
+    }
+    Some((hostport.to_string(), 554))
+}
+
+/// True when the camera accepts TCP. A missing route must not spawn FFmpeg.
+async fn rtsp_tcp_ready(url: &str) -> bool {
+    let Some((host, port)) = rtsp_endpoint(url) else {
+        return true;
+    };
+    let addr = format!("{host}:{port}");
+    tokio::task::spawn_blocking(move || {
+        std::net::TcpStream::connect_timeout(
+            &match addr.parse() {
+                Ok(addr) => addr,
+                Err(_) => return false,
+            },
+            Duration::from_secs(2),
+        )
+        .is_ok()
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn set_streaming(statuses: &CameraStatusMap, camera: &str, up: bool) {
+    let mut map = statuses.write().await;
+    let Some(st) = map.get_mut(camera) else {
+        return;
+    };
+    if st.recording == up && st.detecting == up {
+        return;
+    }
+    st.recording = up;
+    st.detecting = up;
+    if !up {
+        st.objects.clear();
+    }
+}
+
 fn publishers_present(body: &serde_json::Value, camera: &str) -> bool {
     body.get(camera)
         .and_then(|cam| cam.get("producers"))
@@ -514,6 +585,8 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
     reader: R,
     tx: mpsc::Sender<DetectJob>,
     clock: Arc<AtomicU64>,
+    statuses: CameraStatusMap,
+    saw_frame: Arc<AtomicBool>,
 ) -> Result<()> {
     let live_dir = cfg.live_snapshots_dir();
     let width = cfg.detect.width;
@@ -537,6 +610,9 @@ async fn read_raw_loop<R: AsyncReadExt + Unpin>(
             return Err(e.into());
         }
         clock.store(mono_ms(), Ordering::Relaxed);
+        if !saw_frame.swap(true, Ordering::Relaxed) {
+            set_streaming(&statuses, &camera, true).await;
+        }
 
         // JPEG is only the fallback preview. Encoding it inline stalled the raw pipe,
         // which stalled the go2rtc restream on the same FFmpeg process.
@@ -599,6 +675,18 @@ pub(crate) fn rgb_to_jpeg(rgb: &[u8], width: u32, height: u32, quality: u8) -> O
 mod tests {
     use super::*;
     use vigil_common::UsbConfig;
+
+    #[test]
+    fn rtsp_endpoint_keeps_host_and_port() {
+        assert_eq!(
+            rtsp_endpoint("rtsp://admin:pass@192.168.1.20:554/cam/realmonitor?channel=1"),
+            Some(("192.168.1.20".into(), 554))
+        );
+        assert_eq!(
+            rtsp_endpoint("rtsp://192.168.1.5/live"),
+            Some(("192.168.1.5".into(), 554))
+        );
+    }
 
     #[test]
     fn usb_backend_auto_windows_style_name() {

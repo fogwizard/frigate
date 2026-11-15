@@ -19,8 +19,8 @@ pub fn new_status_map(cameras: &[String]) -> CameraStatusMap {
             c.clone(),
             CameraStatus {
                 name: c.clone(),
-                recording: true,
-                detecting: true,
+                recording: false,
+                detecting: false,
                 last_detection: None,
                 objects: Vec::new(),
             },
@@ -62,7 +62,7 @@ pub async fn run_detect_pipeline(
         detect_worker(worker_cfg, worker_infer, worker_events, worker_statuses, rx).await;
     });
 
-    ingest::run_all_cameras(cfg, db, ring, tx).await;
+    ingest::run_all_cameras(cfg, db, ring, tx, statuses).await;
 }
 
 async fn detect_worker(

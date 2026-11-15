@@ -184,7 +184,7 @@ async function loadLive() {
     grid.innerHTML = streams
       .map(
         (s) => `
-      <div class="card" data-cam="${s.name}">
+      <div class="card" data-cam="${s.name}" data-live="0">
         <header><span>${s.name}</span><span class="meta nosignal">无信号</span></header>
         <div class="frame">
           <video src="${s.live_url}" autoplay muted playsinline></video>
@@ -244,11 +244,23 @@ async function loadLive() {
   }
 }
 
+function markOffline(card) {
+  const img = card.querySelector("img");
+  const video = card.querySelector("video");
+  if (img) img.classList.add("dead");
+  if (video) video.style.display = "none";
+  setSignal(card, false);
+}
+
 function refreshSnapshots() {
   document.querySelectorAll("#live-grid .card").forEach((card) => {
     const video = card.querySelector("video");
     const img = card.querySelector("img");
     if (!img) return;
+    if (card.dataset.live !== "1") {
+      markOffline(card);
+      return;
+    }
     if (videoShowing(video)) {
       img.classList.add("dead");
       setSignal(card, true);
@@ -264,6 +276,10 @@ function refreshSnapshots() {
       if (Number(img.dataset.gen) === gen) img.dataset.loading = "0";
       if (Number(img.dataset.gen) !== gen || videoShowing(card.querySelector("video"))) {
         if (videoShowing(card.querySelector("video"))) img.classList.add("dead");
+        return;
+      }
+      if (card.dataset.live !== "1") {
+        markOffline(card);
         return;
       }
       img.src = next.src;
@@ -314,11 +330,19 @@ async function refreshBoxes() {
   try {
     const r = await fetch("/api/status");
     const j = await r.json();
-    const byName = new Map((j.cameras || []).map((c) => [c.name, c.objects || []]));
+    const byName = new Map((j.cameras || []).map((c) => [c.name, c]));
     document.querySelectorAll("#live-grid .card").forEach((card) => {
       const host = card.querySelector(".boxes");
       if (!host) return;
-      const objects = byName.get(card.dataset.cam) || [];
+      const cam = byName.get(card.dataset.cam);
+      const live = !!(cam && cam.recording);
+      card.dataset.live = live ? "1" : "0";
+      if (!live && !videoShowing(card.querySelector("video"))) {
+        markOffline(card);
+        host.innerHTML = "";
+        return;
+      }
+      const objects = (cam && cam.objects) || [];
       placeBoxes(card, host);
       host.innerHTML = objects
         .map((o) => {

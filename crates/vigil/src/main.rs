@@ -81,6 +81,31 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Stop the Mac from idle-sleeping and dropping the camera LAN.
+fn keep_awake() {
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = tokio::process::Command::new("caffeinate");
+        cmd.args(["-ims"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        proc_guard::apply_spawn_hooks(&mut cmd);
+        match cmd.spawn() {
+            Ok(child) => {
+                info!("caffeinate is holding the Mac awake");
+                proc_guard::track_child(&child);
+                std::mem::forget(child);
+            }
+            Err(e) => warn!(error = %e, "caffeinate failed; the Mac may sleep and lose the cameras"),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = ();
+    }
+}
+
 async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -89,6 +114,7 @@ async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
         .init();
 
     proc_guard::init();
+    keep_awake();
 
     let cfg = Arc::new(Config::load(&config).context("load config")?);
 
