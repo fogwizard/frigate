@@ -9,7 +9,6 @@ App({
     loginPath: "/api/miniprogram/login",
     feedPath: "/api/feeding",
     waterPath: "/api/watering",
-    doorPath: "/api/doors/open",
     boardingPath: "/api/boarding",
     openid: "",
     phone: "",

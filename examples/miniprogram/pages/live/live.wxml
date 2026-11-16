@@ -7,7 +7,6 @@
   </view>
 
   <view class="camera-selection">
-    <button wx:if="{{!isAdmin && !camerasLoading && !cameras.length}}" class="btn" bindtap="startBoarding">扫码寄养</button>
     <text class="picker-label">{{isAdmin ? '全部镜头' : '寄养号码 / 镜头'}} · {{cameras.length}} 个</text>
     <picker mode="selector" range="{{cameras}}" range-key="label" value="{{cameraIndex}}" bindchange="selectCamera" disabled="{{!cameras.length || camerasLoading || feeding || watering}}">
       <view class="camera-picker">

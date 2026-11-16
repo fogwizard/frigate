@@ -75,7 +75,7 @@ test("empty permissions never request video", async () => {
   await pending;
   assert.equal(requests.length, 1);
   assert.equal(page.data.camera, "");
-  assert.match(page.data.error, /扫码寄养/);
+  assert.match(page.data.error, /手机号登记/);
 });
 
 test("fast camera switching ignores stale video responses", async () => {

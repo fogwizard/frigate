@@ -24,16 +24,12 @@
     <text class="service-name">实时画面</text>
     <text class="service-desc">查看寄养间镜头</text>
   </view>
-  <view class="service-card" bindtap="startBoarding">
-    <text class="service-name">扫码寄养</text>
-    <text class="service-desc">扫描门店二维码办理寄养</text>
-  </view>
 </view>
 
 <view class="list-heading">{{isAdmin ? '管理员 · 全部镜头' : '寄养记录'}} · {{cameras.length}} 个镜头</view>
 
 <view wx:if="{{error}}" class="err">{{error}}</view>
-<view wx:if="{{!loading && !error && !cameras.length}}" class="hint">{{isAdmin ? '暂无可查看镜头，请联系门店配置' : '暂无有效寄养记录，请扫码寄养'}}</view>
+<view wx:if="{{!loading && !error && !cameras.length}}" class="hint">{{isAdmin ? '暂无可查看镜头，请联系门店配置' : '暂无有效寄养记录，请让门店按手机号登记'}}</view>
 
 <view wx:if="{{cameras.length}}" class="camera-selection">
   <text class="picker-label">{{isAdmin ? '镜头编号' : '寄养号码 / 镜头'}}</text>
@@ -47,11 +43,3 @@
 </view>
 
 <button class="btn" bindtap="reload" loading="{{loading}}" disabled="{{loading}}">刷新设备</button>
-
-<view class="door-section">
-  <text class="door-heading">门店通行</text>
-  <button class="door-button" bindtap="scanOpenDoor" loading="{{doorBusy}}" disabled="{{!doorConfigured || doorBusy || doorCooldown}}">
-    {{doorBusy ? '正在办理' : (doorCooldown ? '请稍候' : '扫一扫开门')}}
-  </button>
-  <text class="door-status" aria-live="polite">{{doorConfigured ? doorStatus : '开门服务未接入'}}</text>
-</view>

@@ -79,7 +79,7 @@ Page({
         const cameraIndex = Math.max(0, cameras.findIndex((item) => item.camera === preferredCamera));
         this.setData({ cameras, cameraIndex, isAdmin: data.isAdmin, camerasLoading: false, openid: getApp().globalData.openid });
         if (!cameras.length) {
-          this.setData({ error: data.isAdmin ? "暂无可查看镜头，请联系门店配置" : "没有有效寄养记录，请扫码寄养" });
+          this.setData({ error: data.isAdmin ? "暂无可查看镜头，请联系门店配置" : "没有有效寄养记录，请让门店按手机号登记" });
           return;
         }
         return this.switchCamera(cameraIndex);
@@ -91,12 +91,6 @@ Page({
 
   selectCamera(event) {
     return this.switchCamera(Number(event.detail.value));
-  },
-
-  startBoarding() {
-    if (!this.unloaded && !this.confirming && !this.data.feeding && !this.data.watering) {
-      wx.redirectTo({ url: "/pages/boarding/boarding" });
-    }
   },
 
   switchCamera(cameraIndex) {
