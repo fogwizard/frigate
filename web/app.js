@@ -98,10 +98,53 @@ function switchPage(name) {
   if (recordingsPager) recordingsPager.hidden = name !== "recordings";
   if (name === "events") loadEvents();
   if (name === "recordings") loadRecordings();
+  if (name === "boarding") loadBoarding();
 }
 
 document.querySelectorAll("nav button").forEach((btn) => {
   btn.addEventListener("click", () => switchPage(btn.dataset.page));
+});
+
+async function loadBoarding() {
+  const msg = $("#boarding-msg");
+  const list = $("#boarding-list");
+  const select = $("#boarding-camera");
+  try {
+    const cams = await fetch("/api/cameras").then((r) => r.json());
+    const names = cams.cameras || [];
+    const chosen = select.value;
+    select.innerHTML = names.map((name) => `<option value="${name}">${name}</option>`).join("");
+    if (names.includes(chosen)) select.value = chosen;
+    const data = await fetch("/api/boarding/assigned").then((r) => r.json());
+    const records = data.records || [];
+    list.innerHTML = records.length
+      ? records.map((row) => `<div class="row"><div><strong>${row.label || row.camera}</strong><div class="sub">${[row.phone && "手机号 " + row.phone, row.wechatId && "微信号 " + row.wechatId, row.camera].filter(Boolean).join(" · ")}</div></div></div>`).join("")
+      : `<div class="empty">还没有按手机号或微信号登记的寄养</div>`;
+    if (msg) msg.textContent = "";
+  } catch (error) {
+    if (msg) msg.textContent = error.message || "寄养列表加载失败";
+  }
+}
+
+$("#boarding-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const body = Object.fromEntries(new FormData(form).entries());
+  const msg = $("#boarding-msg");
+  try {
+    const res = await fetch("/api/boarding/assign", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (msg) msg.textContent = `已添加 ${data.label || data.camera}`;
+    form.reset();
+    loadBoarding();
+  } catch (error) {
+    if (msg) msg.textContent = error.message || "添加失败";
+  }
 });
 
 function formatDataBudget(bytes, maxGb) {

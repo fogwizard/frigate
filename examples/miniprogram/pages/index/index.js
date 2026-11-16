@@ -10,6 +10,9 @@ Page({
     loading: false,
     error: "",
     openid: "",
+    phone: "",
+    wechatId: "",
+    contactBusy: false,
     loggedIn: false,
     loginBusy: false,
     isAdmin: false,
@@ -139,12 +142,55 @@ Page({
       .then((openid) => {
         if (this.unloaded) return;
         if (!openid) throw new Error("微信登录未返回 OpenID");
-        this.setData({ openid, loggedIn: true, loginBusy: false });
+        this.setData({
+          openid,
+          phone: app.globalData.phone || "",
+          wechatId: app.globalData.wechatId || "",
+          loggedIn: true,
+          loginBusy: false,
+        });
         return this.reload();
       })
       .catch((error) => {
         if (this.unloaded) return;
         this.setData({ loginBusy: false, loggedIn: false, openid: "", error: error.message || "微信登录失败" });
+      });
+  },
+
+  onPhone(event) {
+    this.setData({ phone: event.detail.value });
+  },
+
+  onWechat(event) {
+    this.setData({ wechatId: event.detail.value });
+  },
+
+  saveContact() {
+    if (this.unloaded || this.data.contactBusy || !this.data.loggedIn) return;
+    const phone = this.data.phone.trim();
+    const wechatId = this.data.wechatId.trim();
+    if (!phone && !wechatId) {
+      wx.showToast({ title: "请填写手机号或微信号", icon: "none" });
+      return;
+    }
+    this.setData({ contactBusy: true, error: "" });
+    api.saveProfile(phone, wechatId)
+      .then((saved) => {
+        if (this.unloaded) return;
+        const app = getApp();
+        app.globalData.phone = saved.phone || "";
+        app.globalData.wechatId = saved.wechatId || "";
+        this.setData({
+          phone: app.globalData.phone,
+          wechatId: app.globalData.wechatId,
+          contactBusy: false,
+        });
+        wx.showToast({ title: "已保存", icon: "success" });
+        return this.reload();
+      })
+      .catch((error) => {
+        if (this.unloaded) return;
+        this.setData({ contactBusy: false, error: error.message || "保存失败" });
       });
   },
 

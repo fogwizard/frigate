@@ -12,6 +12,8 @@ App({
     doorPath: "/api/doors/open",
     boardingPath: "/api/boarding",
     openid: "",
+    phone: "",
+    wechatId: "",
     sessionToken: "",
     role: "user",
   },
@@ -63,6 +65,8 @@ App({
         throw new Error("登录接口未返回有效的 openid 和 token");
       }
       this.globalData.openid = session.openid;
+      this.globalData.phone = typeof session.phone === "string" ? session.phone : "";
+      this.globalData.wechatId = typeof session.wechatId === "string" ? session.wechatId : "";
       this.globalData.sessionToken = session.token;
       this.globalData.role = session.role === "admin" ? "admin" : "user";
       logger.info("login.completed", { operation: "login", outcome: "success", isAdmin: this.globalData.role === "admin" });

@@ -105,6 +105,13 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_boarding_records_openid ON boarding_records(openid);
 
+            CREATE TABLE IF NOT EXISTS mp_profiles (
+                openid TEXT PRIMARY KEY,
+                phone TEXT NOT NULL DEFAULT '',
+                wechat_id TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS door_tokens (
                 token TEXT PRIMARY KEY,
                 store_id TEXT NOT NULL,
@@ -113,6 +120,14 @@ impl Db {
             );
             ",
         )?;
+        let _ = conn.execute(
+            "ALTER TABLE boarding_records ADD COLUMN phone TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE boarding_records ADD COLUMN wechat_id TEXT NOT NULL DEFAULT ''",
+            [],
+        );
         Ok(())
     }
 
@@ -184,6 +199,7 @@ impl Db {
     }
 
     pub fn list_boarding_records(&self, openid: &str) -> Result<Vec<BoardingRecord>> {
+        self.claim_contact_records(openid)?;
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, camera, number, label, status, payment_status
@@ -203,6 +219,7 @@ impl Db {
     }
 
     pub fn has_active_boarding(&self, openid: &str, camera: &str) -> Result<bool> {
+        self.claim_contact_records(openid)?;
         let conn = self.lock()?;
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM boarding_records
@@ -365,6 +382,109 @@ impl Db {
         }
         self.get_order(&order_id)?
             .ok_or_else(|| anyhow::anyhow!("order missing after insert"))
+    }
+
+    pub fn profile(&self, openid: &str) -> Result<(String, String)> {
+        let conn = self.lock()?;
+        let row = conn
+            .query_row(
+                "SELECT phone, wechat_id FROM mp_profiles WHERE openid = ?1",
+                params![openid],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        Ok(row.unwrap_or_default())
+    }
+
+    pub fn save_profile(&self, openid: &str, phone: &str, wechat_id: &str) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        self.lock()?.execute(
+            "INSERT INTO mp_profiles(openid, phone, wechat_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(openid) DO UPDATE SET phone = excluded.phone, wechat_id = excluded.wechat_id, updated_at = excluded.updated_at",
+            params![openid, phone, wechat_id, now],
+        )?;
+        self.claim_contact_records(openid)
+    }
+
+    /// Attach store-entered rows (keyed by phone or 微信号) to the logged-in OpenID.
+    pub fn claim_contact_records(&self, openid: &str) -> Result<usize> {
+        let (phone, wechat_id) = self.profile(openid)?;
+        if phone.is_empty() && wechat_id.is_empty() {
+            return Ok(0);
+        }
+        let n = self.lock()?.execute(
+            "UPDATE boarding_records SET openid = ?1
+             WHERE openid = ''
+               AND ((?2 != '' AND phone = ?2) OR (?3 != '' AND lower(wechat_id) = lower(?3)))",
+            params![openid, phone, wechat_id],
+        )?;
+        Ok(n)
+    }
+
+    pub fn assign_boarding(
+        &self,
+        phone: &str,
+        wechat_id: &str,
+        camera: &str,
+        number: &str,
+        label: &str,
+    ) -> Result<String> {
+        let conn = self.lock()?;
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM boarding_records
+                 WHERE camera = ?1 AND status = 'active' AND payment_status = 'paid'
+                   AND ((?2 != '' AND phone = ?2) OR (?3 != '' AND lower(wechat_id) = lower(?3)))
+                 LIMIT 1",
+                params![camera, phone, wechat_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT openid FROM mp_profiles
+                 WHERE (?1 != '' AND phone = ?1) OR (?2 != '' AND lower(wechat_id) = lower(?2))
+                 LIMIT 1",
+                params![phone, wechat_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let id = Uuid::new_v4().to_string();
+        let order_id = format!("store-{id}");
+        conn.execute(
+            "INSERT INTO boarding_records(
+                id, openid, order_id, camera, number, label, status, payment_status, phone, wechat_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', 'paid', ?7, ?8)",
+            params![
+                id,
+                owner.unwrap_or_default(),
+                order_id,
+                camera,
+                number,
+                label,
+                phone,
+                wechat_id
+            ],
+        )?;
+        Ok(id)
+    }
+
+    pub fn list_store_boarding(&self) -> Result<Vec<(String, String, String, String, String, String)>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, phone, wechat_id, camera, number, label
+             FROM boarding_records
+             WHERE status = 'active' AND payment_status = 'paid' AND (phone != '' OR wechat_id != '')
+             ORDER BY label",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn consume_door_token(&self, token: &str) -> Result<bool> {

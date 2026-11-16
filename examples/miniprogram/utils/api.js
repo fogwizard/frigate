@@ -89,6 +89,14 @@ function request(path, options = {}) {
   });
 }
 
+function saveProfile(phone, wechatId) {
+  return request("/api/miniprogram/profile", {
+    method: "POST",
+    data: { phone, wechatId },
+    operation: "profile",
+  });
+}
+
 function loginWithCode(code) {
   const path = getApp().globalData.loginPath;
   if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) {
@@ -211,6 +219,7 @@ module.exports = {
   createBoardingOrder,
   boardingOrder,
   loginWithCode,
+  saveProfile,
   listStreams,
   playUrl,
   feed,

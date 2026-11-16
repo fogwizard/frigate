@@ -2,7 +2,13 @@
   <view class="account-copy">
     <text class="hint">微信 OpenID</text>
     <text class="account-id">{{loginBusy ? '正在登录' : (loggedIn ? '已登录' : '未登录')}}</text>
-    <text wx:if="{{loggedIn && openid}}" class="openid-line" selectable>{{openid}}</text>
+    <text wx:if="{{loggedIn && (phone || wechatId)}}" class="openid-line" selectable>{{phone ? '手机号 ' + phone : ''}}{{phone && wechatId ? '  ' : ''}}{{wechatId ? '微信号 ' + wechatId : ''}}</text>
+  </view>
+  <view wx:if="{{loggedIn}}" class="contact-card">
+    <text class="hint">门店按手机号或微信号登记寄养。请填写和门店一致的一项。</text>
+    <input class="contact-input" type="number" maxlength="11" placeholder="手机号" value="{{phone}}" bindinput="onPhone"/>
+    <input class="contact-input" maxlength="32" placeholder="微信号" value="{{wechatId}}" bindinput="onWechat"/>
+    <button class="login-button contact-save" bindtap="saveContact" loading="{{contactBusy}}" disabled="{{contactBusy}}">保存联系方式</button>
   </view>
   <button class="login-button" bindtap="loginWithWechat" loading="{{loginBusy}}" disabled="{{loginBusy}}">
     {{loggedIn ? '重新登录' : '微信登录'}}

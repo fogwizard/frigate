@@ -101,6 +101,38 @@ h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.35rem; }
   padding: 0.35rem 0.5rem;
   font: inherit;
 }
+.boarding-form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 28rem;
+  margin: 0 0 1rem;
+}
+.boarding-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.boarding-form input,
+.boarding-form select {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.boarding-form button {
+  justify-self: start;
+  padding: 0.55rem 1rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
 .hint { color: var(--muted); margin: 0 0 1rem; font-size: 0.9rem; }
 
 .grid {

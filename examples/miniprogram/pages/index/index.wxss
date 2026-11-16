@@ -30,6 +30,26 @@
   word-break: break-all;
 }
 
+.contact-card {
+  margin: 0 32rpx 12rpx;
+  padding: 24rpx;
+  background: #fff;
+  border: 1rpx solid #dce2e0;
+  border-radius: 16rpx;
+}
+
+.contact-input {
+  margin-top: 16rpx;
+  padding: 16rpx 20rpx;
+  border: 1rpx solid #bfcfc7;
+  border-radius: 12rpx;
+  background: #f5f7f6;
+}
+
+.contact-save {
+  margin: 20rpx 0 0;
+}
+
 .login-button {
   flex-shrink: 0;
   margin: 0 0 0 24rpx;

@@ -14,6 +14,7 @@
       <button data-page="live" class="active">实时</button>
       <button data-page="events">事件</button>
       <button data-page="recordings">录像</button>
+      <button data-page="boarding">寄养</button>
     </nav>
     <div id="events-pager" class="pager" hidden>
       <select id="events-camera" aria-label="摄像头">
@@ -52,8 +53,25 @@
       <h1>录像分段</h1>
       <div id="rec-list" class="list"></div>
     </section>
+
+    <section id="page-boarding" class="page">
+      <h1>寄养登记</h1>
+      <p class="hint">按顾客在小程序里填写的手机号或微信号添加。OpenID 不用填。</p>
+      <form id="boarding-form" class="boarding-form">
+        <label>手机号 <input name="phone" inputmode="numeric" placeholder="11 位手机号"></label>
+        <label>微信号 <input name="wechatId" placeholder="和顾客填写的一致"></label>
+        <label>镜头
+          <select name="camera" id="boarding-camera" required></select>
+        </label>
+        <label>笼位号 <input name="number" placeholder="例如 01"></label>
+        <label>名称 <input name="label" placeholder="例如 寄养房 01"></label>
+        <button type="submit">添加寄养</button>
+      </form>
+      <p id="boarding-msg" class="hint"></p>
+      <div id="boarding-list" class="list"></div>
+    </section>
   </main>
 
-    <script src="/app.js?v=18"></script>
+    <script src="/app.js?v=19"></script>
 </body>
 </html>
