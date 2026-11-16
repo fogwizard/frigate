@@ -1,18 +1,30 @@
 <view class="account-bar">
   <view class="account-copy">
-    <text class="hint">微信身份 · OpenID</text>
-    <text class="account-id" selectable>{{openid || (loading ? '正在登录' : '未登录')}}</text>
+    <text class="hint">{{loggedIn ? '已使用微信 OpenID 登录' : '登录后办理寄养和门店服务'}}</text>
+    <text class="account-id" selectable>{{openid || (loginBusy || loading ? '正在登录' : '未登录')}}</text>
+  </view>
+  <button class="login-button" bindtap="loginWithWechat" loading="{{loginBusy}}" disabled="{{loginBusy}}">
+    {{loggedIn ? '重新登录' : '微信登录'}}
+  </button>
+</view>
+
+<view class="services">
+  <text class="list-heading">服务</text>
+  <view class="service-card primary" bindtap="openMyBoarding">
+    <text class="service-name">我的寄养</text>
+    <text class="service-desc">{{isAdmin ? '查看全部镜头' : (cameras.length ? cameras.length + ' 个有效寄养' : '查看寄养记录')}}</text>
+  </view>
+  <view class="service-card" bindtap="openLive">
+    <text class="service-name">实时画面</text>
+    <text class="service-desc">查看寄养间镜头</text>
+  </view>
+  <view class="service-card" bindtap="startBoarding">
+    <text class="service-name">扫码寄养</text>
+    <text class="service-desc">扫描门店二维码办理寄养</text>
   </view>
 </view>
-<view class="door-section">
-  <text class="door-heading">门店通行</text>
-  <button class="door-button" bindtap="scanOpenDoor" loading="{{doorBusy}}" disabled="{{!doorConfigured || doorBusy || doorCooldown}}">
-    {{doorBusy ? '正在办理' : (doorCooldown ? '请稍候' : '扫一扫开门')}}
-  </button>
-  <text class="door-status" aria-live="polite">{{doorConfigured ? doorStatus : '开门服务未接入'}}</text>
-</view>
-<view class="list-heading">{{isAdmin ? '管理员 · 全部镜头' : '我的寄养'}} · {{cameras.length}} 个镜头</view>
-<button class="btn" bindtap="startBoarding" disabled="{{doorBusy}}">扫一扫寄养</button>
+
+<view class="list-heading">{{isAdmin ? '管理员 · 全部镜头' : '寄养记录'}} · {{cameras.length}} 个镜头</view>
 
 <view wx:if="{{error}}" class="err">{{error}}</view>
 <view wx:if="{{!loading && !error && !cameras.length}}" class="hint">{{isAdmin ? '暂无可查看镜头，请联系门店配置' : '暂无有效寄养记录，请扫码寄养'}}</view>
@@ -29,3 +41,11 @@
 </view>
 
 <button class="btn" bindtap="reload" loading="{{loading}}" disabled="{{loading}}">刷新设备</button>
+
+<view class="door-section">
+  <text class="door-heading">门店通行</text>
+  <button class="door-button" bindtap="scanOpenDoor" loading="{{doorBusy}}" disabled="{{!doorConfigured || doorBusy || doorCooldown}}">
+    {{doorBusy ? '正在办理' : (doorCooldown ? '请稍候' : '扫一扫开门')}}
+  </button>
+  <text class="door-status" aria-live="polite">{{doorConfigured ? doorStatus : '开门服务未接入'}}</text>
+</view>

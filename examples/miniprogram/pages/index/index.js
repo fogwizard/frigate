@@ -10,6 +10,8 @@ Page({
     loading: false,
     error: "",
     openid: "",
+    loggedIn: false,
+    loginBusy: false,
     isAdmin: false,
     doorConfigured: false,
     doorBusy: false,
@@ -21,6 +23,7 @@ Page({
     const { openid, doorPath } = getApp().globalData;
     this.setData({
       openid,
+      loggedIn: Boolean(openid),
       doorConfigured: typeof doorPath === "string" && doorPath.startsWith("/") && !doorPath.startsWith("//"),
     });
     if (!this.data.doorBusy) this.reload();
@@ -41,12 +44,14 @@ Page({
         if (this.unloaded) return;
         const cameras = normalizeCameras(data);
         const cameraIndex = selected ? Math.max(0, cameras.findIndex((item) => item.camera === selected.camera)) : 0;
-        this.setData({ cameras, cameraIndex, isAdmin: data.isAdmin, loading: false, openid: getApp().globalData.openid });
+        const openid = getApp().globalData.openid;
+        this.setData({ cameras, cameraIndex, isAdmin: data.isAdmin, loading: false, openid, loggedIn: Boolean(openid) });
       })
       .catch((e) => {
         if (this.unloaded) return;
         logger.warn("home.load_failed", { statusCode: e.statusCode });
-        this.setData({ error: String(e.message || e), loading: false, cameras: [], openid: getApp().globalData.openid });
+        const openid = getApp().globalData.openid;
+        this.setData({ error: String(e.message || e), loading: false, cameras: [], openid, loggedIn: Boolean(openid) });
       });
   },
 
@@ -121,6 +126,31 @@ Page({
     if (!this.data.loading && Number.isInteger(cameraIndex) && this.data.cameras[cameraIndex]) {
       this.setData({ cameraIndex });
     }
+  },
+
+  loginWithWechat() {
+    if (this.unloaded || this.data.loginBusy) return;
+    const app = getApp();
+    app.globalData.sessionToken = "";
+    app.globalData.openid = "";
+    app.globalData.role = "user";
+    this.setData({ loginBusy: true, error: "", openid: "", loggedIn: false });
+    return app.login()
+      .then((openid) => {
+        if (this.unloaded) return;
+        this.setData({ openid, loggedIn: Boolean(openid), loginBusy: false });
+        return this.reload();
+      })
+      .catch((error) => {
+        if (this.unloaded) return;
+        this.setData({ loginBusy: false, loggedIn: false, openid: "", error: error.message || "微信登录失败" });
+      });
+  },
+
+  openMyBoarding() {
+    if (this.data.doorBusy || this.unloaded) return;
+    if (!getApp().globalData.openid) return this.loginWithWechat();
+    if (!this.data.loading && !this.data.cameras.length) this.startBoarding();
   },
 
   startBoarding() {
