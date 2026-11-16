@@ -1,0 +1,43 @@
+# WeChat cannot use go2rtc's query-string API or the LAN address.
+# This file runs on the go2rtc machine (122.51.106.239) and exposes:
+#   http://122.51.106.239/cam1.m3u8  →  127.0.0.1:1984/api/stream.m3u8?src=cam1
+#   http://122.51.106.239/cam1.flv   →  127.0.0.1:1984/api/stream.flv?src=cam1
+#   http://122.51.106.239/hls/*      →  127.0.0.1:1984/api/hls/*
+#
+# The master playlist's relative line "hls/playlist.m3u8?id=…" resolves to /hls/…
+# and that playlist's "segment.ts?…" resolves to /hls/segment.ts. No body rewrite.
+#
+# Install on the server, then: sudo systemctl reload caddy
+# Port 80 on this host already accepts connections; nothing is listening there yet.
+
+{
+	auto_https off
+}
+
+:80 {
+	@flv path_regexp flv ^/([A-Za-z0-9_-]+)\.flv$
+	handle @flv {
+		rewrite * /api/stream.flv?src={http.regexp.flv.1}
+		reverse_proxy 127.0.0.1:1984 {
+			flush_interval -1
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	@m3u8 path_regexp m3u8 ^/([A-Za-z0-9_-]+)\.m3u8$
+	handle @m3u8 {
+		rewrite * /api/stream.m3u8?src={http.regexp.m3u8.1}
+		reverse_proxy 127.0.0.1:1984 {
+			flush_interval -1
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	handle_path /hls/* {
+		rewrite * /api/hls{uri}
+		reverse_proxy 127.0.0.1:1984 {
+			flush_interval -1
+			header_up Host {upstream_hostport}
+		}
+	}
+}

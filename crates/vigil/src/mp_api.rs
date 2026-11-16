@@ -277,9 +277,11 @@ pub async fn streams_play(
         return Err(AppError::unavailable("stream sharing disabled"));
     }
     let play = stream_sign::issue_play_url(&st.cfg.stream, &camera, Utc::now());
-    // Developer tools cannot play live-player FLV. The video component plays this
-    // HLS playlist; the segments are still the go2rtc stream.
-    let url = player_hls_url(&headers, &camera);
+    // The phone pulls this from Caddy on the go2rtc machine. Caddy maps
+    // /{camera}.m3u8 to go2rtc and keeps the segments on that same public host.
+    let Some(url) = wechat_play_url(&st.cfg.go2rtc.api, &camera) else {
+        return Err(AppError::unavailable("go2rtc api is not configured"));
+    };
     Ok(Json(json!({
         "camera": camera,
         "url": url,
@@ -322,13 +324,15 @@ pub async fn streams_flv(
         .map_err(AppError::internal)
 }
 
-fn player_hls_url(headers: &HeaderMap, camera: &str) -> String {
-    let host = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .filter(|host| !host.is_empty())
-        .unwrap_or("127.0.0.1:8970");
-    format!("http://{host}/hls/{camera}.m3u8")
+/// Public playlist on port 80. Not the LAN host, and not go2rtc's `:1984/api/…?src=` URL.
+fn wechat_play_url(api: &str, camera: &str) -> Option<String> {
+    let base = go2rtc_http_base(api)?;
+    let authority = base.split("://").nth(1)?;
+    let host = authority.split(['/', ':']).next().unwrap_or("");
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!("http://{host}/{camera}.m3u8"))
 }
 
 pub async fn streams_hls(
@@ -819,6 +823,19 @@ pub async fn door_open(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wechat_play_url_is_the_public_caddy_playlist() {
+        assert_eq!(
+            super::wechat_play_url("122.51.106.239:1984", "cam1").as_deref(),
+            Some("http://122.51.106.239/cam1.m3u8")
+        );
+        assert_eq!(
+            super::wechat_play_url("https://stream.example.com/", "cam1").as_deref(),
+            Some("http://stream.example.com/cam1.m3u8")
+        );
+        assert_eq!(super::wechat_play_url("  ", "cam1"), None);
+    }
+
     #[test]
     fn play_url_uses_the_go2rtc_api() {
         assert_eq!(

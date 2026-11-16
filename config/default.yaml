@@ -106,9 +106,9 @@ events:
 web:
   bind: "0.0.0.0:8970"
 
-# WeChat mini-program HTTP-FLV (go2rtc + Nginx).
-# Restream: Vigil FFmpeg publishes RTSP to go2rtc; go2rtc serves real HTTP-FLV for live-player.
-# See packaging/go2rtc.yaml and packaging/nginx-flv.conf.example
+# WeChat mini-program video. Caddy on the go2rtc machine turns
+# /{camera}.m3u8 and /{camera}.flv into go2rtc's /api/stream.* URLs.
+# See packaging/Caddyfile. The phone must not be sent this Mac's LAN address.
 # 本机能找到 go2rtc 就拉起；找不到则打印远程启动命令，由另一台机器执行。工作目录是项目根目录。
 go2rtc:
   binary: go2rtc
@@ -124,7 +124,7 @@ stream:
   # Nginx maps /{camera}.flv → go2rtc /api/stream.flv?src={camera}
   public_base: "https://stream.example.com"
   path_template: "/{camera}"
-  # 小程序 live-player 使用的地址，与 ffplay 验证过的 go2rtc HTTP-FLV 一致
+  # 网页预览仍用 go2rtc 的 HTTP-FLV。小程序播放地址由 Caddy 的 /{camera}.m3u8 给出。
   play_url_template: "http://122.51.106.239:1984/api/stream.flv?src={camera}"
   sign_secret: "change-me"
   sign_ttl_secs: 120
