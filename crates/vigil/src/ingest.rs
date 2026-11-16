@@ -135,7 +135,7 @@ async fn run_combined(
         }
         logged_down = false;
 
-        match spawn_combined_ffmpeg(&cfg, &db, &camera, &source, &kind).await {
+        match spawn_combined_ffmpeg(&cfg, &camera, &source, &kind).await {
             Ok(mut child) => {
                 let do_restream = restream_enabled(&cfg, &kind);
                 info!(
@@ -335,7 +335,6 @@ fn spawn_ffmpeg_stderr_logger(camera: String, stderr: impl tokio::io::AsyncRead 
 
 async fn spawn_combined_ffmpeg(
     cfg: &Config,
-    db: &Db,
     camera: &str,
     source: &str,
     kind: &SourceKind,
@@ -345,11 +344,7 @@ async fn spawn_combined_ffmpeg(
     // FFmpeg strftime uses the machine's local clock, not UTC.
     let today = Local::now().format("%Y-%m-%d").to_string();
     let day_dir = out_dir.join(&today);
-    let new_day = !day_dir.exists();
     std::fs::create_dir_all(&day_dir)?;
-    if new_day {
-        record::prune_camera(cfg, db, camera);
-    }
     let pattern = out_dir
         .join("%Y-%m-%d")
         .join("%H-%M-%S.mp4")

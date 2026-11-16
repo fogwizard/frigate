@@ -326,31 +326,15 @@ impl Db {
         Ok(ev)
     }
 
-    pub fn delete_segments_under(&self, dir: &Path) -> Result<usize> {
-        let prefix = dir.to_string_lossy().to_string();
-        let alt = prefix.replace('\\', "/");
+    pub fn delete_segment_at(&self, path: &Path) -> Result<usize> {
+        let path = path.to_string_lossy().to_string();
+        let fwd = path.replace('\\', "/");
         let conn = self.lock()?;
-        let mut stmt = conn.prepare("SELECT id, path FROM segments")?;
-        let ids: Vec<i64> = stmt
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-            .filter_map(|r| r.ok())
-            .filter_map(|(id, path)| {
-                let fwd = path.replace('\\', "/");
-                let under = |file: &str, root: &str| {
-                    file.starts_with(root)
-                        && file.as_bytes().get(root.len()).is_some_and(|b| *b == b'/' || *b == b'\\')
-                };
-                if under(&path, &prefix) || under(&fwd, &alt) {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for id in &ids {
-            conn.execute("DELETE FROM segments WHERE id = ?1", params![id])?;
-        }
-        Ok(ids.len())
+        let n = conn.execute(
+            "DELETE FROM segments WHERE path = ?1 OR replace(path, '\\', '/') = ?2",
+            params![path, fwd],
+        )?;
+        Ok(n)
     }
 
     pub fn close_open_events(&self, end: DateTime<Utc>) -> Result<usize> {
@@ -364,14 +348,16 @@ impl Db {
 
     pub fn delete_old_events(
         &self,
+        camera: Option<&str>,
         before: DateTime<Utc>,
     ) -> Result<Vec<(Option<String>, Option<String>)>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT id, snapshot_path, clip_path FROM events WHERE start_time < ?1",
+            "SELECT id, snapshot_path, clip_path FROM events
+             WHERE start_time < ?1 AND (?2 IS NULL OR camera = ?2)",
         )?;
         let rows: Vec<(String, Option<String>, Option<String>)> = stmt
-            .query_map(params![before.to_rfc3339()], |r| {
+            .query_map(params![before.to_rfc3339(), camera], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })?
             .filter_map(|r| r.ok())

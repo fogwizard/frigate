@@ -172,8 +172,9 @@ impl CameraConfig {
 pub struct RecordConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_retain_days")]
-    pub retain_days: u32,
+    /// Delete the oldest recordings once `paths.data_dir` grows past this many gibibytes.
+    #[serde(default = "default_max_gb")]
+    pub max_gb: u64,
     #[serde(default = "default_segment_secs")]
     pub segment_secs: u32,
 }
@@ -181,8 +182,8 @@ pub struct RecordConfig {
 fn default_true() -> bool {
     true
 }
-fn default_retain_days() -> u32 {
-    3
+fn default_max_gb() -> u64 {
+    100
 }
 fn default_segment_secs() -> u32 {
     60
@@ -192,7 +193,7 @@ impl Default for RecordConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            retain_days: default_retain_days(),
+            max_gb: default_max_gb(),
             segment_secs: default_segment_secs(),
         }
     }
@@ -200,17 +201,12 @@ impl Default for RecordConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventsConfig {
-    #[serde(default = "default_events_retain")]
-    pub retain_days: u32,
     #[serde(default = "default_pre_capture")]
     pub pre_capture_secs: u32,
     #[serde(default = "default_post_capture")]
     pub post_capture_secs: u32,
 }
 
-fn default_events_retain() -> u32 {
-    3
-}
 fn default_pre_capture() -> u32 {
     5
 }
@@ -221,7 +217,6 @@ fn default_post_capture() -> u32 {
 impl Default for EventsConfig {
     fn default() -> Self {
         Self {
-            retain_days: default_events_retain(),
             pre_capture_secs: default_pre_capture(),
             post_capture_secs: default_post_capture(),
         }

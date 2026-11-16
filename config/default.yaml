@@ -91,14 +91,12 @@ cameras:
 
 record:
   enabled: true
-  # 保留今天和之前 2 个本地日。第 4 天 0 点删掉最旧的那一天，
-  # 同时删掉 data/clips 里同一天的片段和对应事件。
-  retain_days: 3
+  # 每分钟看一次 data 目录。超过这个大小就按文件名时间删最旧的录像，直到回到限额以下。
+  # 每一路正在写入的最新分段会留下。同一时间之前的事件和片段一起删。
+  max_gb: 100
   segment_secs: 60
 
 events:
-  # 事件和片段跟录像同一天删除，避免列表里留下点不开的记录。
-  retain_days: 3
   pre_capture_secs: 5
   post_capture_secs: 5
 

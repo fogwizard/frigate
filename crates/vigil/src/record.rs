@@ -1,5 +1,6 @@
 use crate::db::Db;
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Utc};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -10,15 +11,7 @@ use vigil_common::Config;
 pub async fn segment_tracker_loop(cfg: Arc<Config>, db: Arc<Db>, camera: String) {
     let interval = Duration::from_secs(5);
     let camera_root = cfg.recordings_dir().join(&camera);
-    let mut last_day: Option<NaiveDate> = None;
-    // Existing backlog is trimmed as soon as this camera's tracker starts.
-    // A later local day trims again.
     loop {
-        let today = Local::now().date_naive();
-        if last_day != Some(today) {
-            prune_camera(&cfg, &db, &camera);
-            last_day = Some(today);
-        }
         if let Err(e) = index_recordings(&db, &camera, &camera_root) {
             warn!(camera = %camera, error = %e, "index recordings");
         }
@@ -133,127 +126,184 @@ fn usable_recording(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.len() >= 1024)
 }
 
-/// Drop local day directories once they fall outside the retain window.
-/// `retain_days` includes today, so 3 keeps three folders and the fourth local
-/// day deletes the oldest one. Folder names come from FFmpeg's local clock.
-/// The same cutoff removes that day's clips and event rows, so the list has
-/// nothing left to open.
-pub fn prune_camera(cfg: &Config, db: &Db, camera: &str) {
-    let today = Local::now().date_naive();
-    let root = cfg.recordings_dir().join(camera);
-    prune_expired_days_on(&root, cfg.record.retain_days, db, camera, today);
-    prune_expired_clips_and_events(&cfg.clips_dir(), cfg.record.retain_days, db, today);
+/// Once a minute, delete the oldest timestamp-named recordings while `data/` is over budget.
+pub fn enforce_data_budget(cfg: &Config, db: &Db) -> anyhow::Result<()> {
+    let limit = cfg.record.max_gb.saturating_mul(1024 * 1024 * 1024);
+    prune_videos_to(&cfg.paths.data_dir, &cfg.recordings_dir(), limit, db);
+    Ok(())
 }
 
-/// Delete clips and the events that point at them once their local day is
-/// outside the same window as recordings.
-pub fn prune_expired_clips_and_events(clips_dir: &Path, retain_days: u32, db: &Db, today: NaiveDate) {
-    let cutoff = today - chrono::Duration::days(retain_days.saturating_sub(1) as i64);
-    let before = local_midnight_utc(cutoff);
-    let removed = match db.delete_old_events(before) {
+/// `recordings` holds `camera/YYYY-MM-DD/HH-MM-SS.mp4`. The newest file of each
+/// camera is the segment ffmpeg is writing, so it stays even when the directory
+/// is still over `limit`. Events older than a camera's oldest kept recording go
+/// with the files that were removed.
+fn prune_videos_to(data_dir: &Path, recordings: &Path, limit: u64, db: &Db) {
+    let mut used = dir_size(data_dir);
+    if used <= limit {
+        return;
+    }
+    let videos = recording_videos(recordings);
+    let keep = newest_per_camera(recordings, &videos);
+    let mut deleted = 0usize;
+    let mut removed: HashSet<PathBuf> = HashSet::new();
+    let mut touched: HashSet<String> = HashSet::new();
+    for (when, path) in &videos {
+        if used <= limit || keep.contains(path) {
+            continue;
+        }
+        let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        match std::fs::remove_file(path) {
+            Ok(()) => {
+                if let Err(e) = db.delete_segment_at(path) {
+                    warn!(path = %path.display(), error = %e, "delete segment row");
+                }
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::remove_dir(parent);
+                }
+                if let Some(camera) = camera_name(recordings, path) {
+                    touched.insert(camera);
+                }
+                removed.insert(path.clone());
+                deleted += 1;
+                used = used.saturating_sub(len);
+                info!(path = %path.display(), bytes = len, %when, "deleted oldest recording");
+            }
+            Err(e) => warn!(path = %path.display(), error = %e, "delete oldest recording"),
+        }
+    }
+    let mut events = 0usize;
+    for camera in &touched {
+        let Some(cutoff) = videos
+            .iter()
+            .filter(|(_, path)| {
+                camera_name(recordings, path).as_deref() == Some(camera.as_str()) && !removed.contains(path)
+            })
+            .map(|(when, _)| *when)
+            .min()
+        else {
+            continue;
+        };
+        let (n, bytes) = remove_events_before(db, camera, cutoff);
+        events += n;
+        used = used.saturating_sub(bytes);
+    }
+    if deleted > 0 {
+        info!(deleted, events, after = used, limit, "data directory trimmed to budget");
+    } else if used > limit {
+        warn!(used, limit, "data directory over budget and every remaining recording is still being written");
+    }
+}
+
+fn remove_events_before(db: &Db, camera: &str, before: DateTime<Utc>) -> (usize, u64) {
+    let removed = match db.delete_old_events(Some(camera), before) {
         Ok(rows) => rows,
         Err(e) => {
-            warn!(error = %e, "delete events for expired days");
-            Vec::new()
+            warn!(%camera, error = %e, "delete events older than kept recordings");
+            return (0, 0);
         }
     };
-    let mut files = 0usize;
+    let n = removed.len();
+    let mut bytes = 0u64;
     for (snap, clip) in &removed {
-        if remove_file(snap) {
-            files += 1;
-        }
-        if remove_file(clip) {
-            files += 1;
+        if let Some(path) = snap {
+            bytes = bytes.saturating_add(file_len(Path::new(path)));
+            let _ = std::fs::remove_file(path);
         }
         if let Some(path) = clip {
-            let _ = std::fs::remove_file(Path::new(path).with_extension("txt"));
+            let clip_path = Path::new(path);
+            bytes = bytes.saturating_add(file_len(clip_path));
+            let _ = std::fs::remove_file(clip_path);
+            let note = clip_path.with_extension("txt");
+            bytes = bytes.saturating_add(file_len(&note));
+            let _ = std::fs::remove_file(note);
         }
     }
-    files += sweep_old_clip_files(clips_dir, before);
-    if !removed.is_empty() || files > 0 {
-        info!(events = removed.len(), files, %cutoff, "deleted clips and events older than retain window");
-    }
+    (n, bytes)
 }
 
-fn remove_file(path: &Option<String>) -> bool {
-    let Some(path) = path else {
-        return false;
-    };
-    std::fs::remove_file(path).is_ok()
+fn file_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-fn sweep_old_clip_files(clips_dir: &Path, before: DateTime<Utc>) -> usize {
-    let Ok(rd) = std::fs::read_dir(clips_dir) else {
-        return 0;
-    };
-    let mut n = 0;
-    for entry in rd.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Ok(meta) = path.metadata() else {
+fn dir_size(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        if DateTime::<Utc>::from(modified) < before && std::fs::remove_file(&path).is_ok() {
-            n += 1;
-        }
-    }
-    n
-}
-
-fn local_midnight_utc(day: NaiveDate) -> DateTime<Utc> {
-    let naive = day.and_hms_opt(0, 0, 0).expect("midnight");
-    Local
-        .from_local_datetime(&naive)
-        .earliest()
-        .map(|t| t.with_timezone(&Utc))
-        .unwrap_or_else(|| Utc.from_utc_datetime(&naive))
-}
-
-fn prune_expired_days_on(
-    camera_root: &Path,
-    retain_days: u32,
-    db: &Db,
-    camera: &str,
-    today: NaiveDate,
-) {
-    // Keep `retain_days` calendar folders, including today. Older day dirs are removed.
-    let cutoff = today - chrono::Duration::days(retain_days.saturating_sub(1) as i64);
-    let mut old: Vec<(NaiveDate, PathBuf)> = day_dirs(camera_root)
-        .into_iter()
-        .filter(|(date, _)| *date < cutoff)
-        .collect();
-    old.sort_by_key(|(date, _)| *date);
-    for (date, dir) in old {
-        match std::fs::remove_dir_all(&dir) {
-            Ok(()) => {
-                let n = db.delete_segments_under(&dir).unwrap_or(0);
-                info!(%camera, %date, segments = n, dir = %dir.display(), "deleted recording day older than retain window");
-            }
-            Err(e) => warn!(%camera, dir = %dir.display(), error = %e, "delete recording day"),
-        }
-    }
-}
-
-fn day_dirs(camera_root: &Path) -> Vec<(NaiveDate, PathBuf)> {
-    let Ok(rd) = std::fs::read_dir(camera_root) else {
-        return Vec::new();
-    };
-    rd.flatten()
-        .filter_map(|entry| {
+        for entry in rd.flatten() {
             let path = entry.path();
-            if !path.is_dir() {
-                return None;
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(path);
+            } else {
+                total = total.saturating_add(meta.len());
             }
-            let name = path.file_name()?.to_str()?;
-            let date = NaiveDate::parse_from_str(name, "%Y-%m-%d").ok()?;
-            Some((date, path))
-        })
-        .collect()
+        }
+    }
+    total
+}
+
+fn recording_videos(recordings: &Path) -> Vec<(DateTime<Utc>, PathBuf)> {
+    let mut out = Vec::new();
+    let Ok(cams) = std::fs::read_dir(recordings) else {
+        return out;
+    };
+    for cam in cams.flatten() {
+        if !cam.path().is_dir() {
+            continue;
+        }
+        let Ok(days) = std::fs::read_dir(cam.path()) else {
+            continue;
+        };
+        for day in days.flatten() {
+            if !day.path().is_dir() {
+                continue;
+            }
+            let Ok(files) = std::fs::read_dir(day.path()) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let path = file.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("mp4") {
+                    continue;
+                }
+                let Some(when) = recording_time(&path) else {
+                    continue;
+                };
+                out.push((when, path));
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    out
+}
+
+fn newest_per_camera(recordings: &Path, videos: &[(DateTime<Utc>, PathBuf)]) -> HashSet<PathBuf> {
+    let mut keep: HashMap<String, (DateTime<Utc>, PathBuf)> = HashMap::new();
+    for (when, path) in videos {
+        let Some(camera) = camera_name(recordings, path) else {
+            continue;
+        };
+        match keep.get(&camera) {
+            Some((kept_at, kept_path)) if (*when, path) <= (*kept_at, kept_path) => {}
+            _ => {
+                keep.insert(camera, (*when, path.clone()));
+            }
+        }
+    }
+    keep.into_values().map(|(_, path)| path).collect()
+}
+
+fn camera_name(recordings: &Path, file: &Path) -> Option<String> {
+    let rel = file.strip_prefix(recordings).ok()?;
+    rel.components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -261,78 +311,28 @@ mod tests {
     use super::*;
     use crate::db::Db;
 
-    #[test]
-    fn new_day_deletes_dirs_older_than_a_week() {
-        let root = std::env::temp_dir().join(format!("vigil-rec-{}", uuid::Uuid::new_v4()));
-        let cam = root.join("cam1");
-        std::fs::create_dir_all(cam.join("2026-10-01")).unwrap();
-        std::fs::create_dir_all(cam.join("2026-10-13")).unwrap();
-        std::fs::create_dir_all(cam.join("2026-10-14")).unwrap();
-        std::fs::create_dir_all(cam.join("2026-10-15")).unwrap();
-        std::fs::create_dir_all(cam.join("2026-10-21")).unwrap();
-        std::fs::write(cam.join("2026-10-01").join("00-00-00.mp4"), b"old").unwrap();
-        let db_path = root.join("t.db");
-        let db = Db::open(&db_path).unwrap();
-        let old_start = chrono::DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        db.insert_segment(
-            "cam1",
-            &cam.join("2026-10-01").join("00-00-00.mp4").to_string_lossy(),
-            old_start,
-        )
-        .unwrap();
-
-        prune_expired_days_on(
-            &cam,
-            7,
-            &db,
-            "cam1",
-            NaiveDate::from_ymd_opt(2026, 10, 21).unwrap(),
-        );
-
-        assert!(!cam.join("2026-10-01").exists());
-        assert!(!cam.join("2026-10-13").exists());
-        assert!(!cam.join("2026-10-14").exists());
-        assert!(cam.join("2026-10-15").exists());
-        assert!(cam.join("2026-10-21").exists());
-        assert!(db.list_segments(Some("cam1"), None, None, 10, 0).unwrap().is_empty());
-        let _ = std::fs::remove_dir_all(&root);
+    fn video(dir: &Path, bytes: usize) {
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        std::fs::write(dir, vec![0u8; bytes]).unwrap();
     }
 
     #[test]
-    fn the_fourth_day_deletes_the_oldest_of_three() {
-        let root = std::env::temp_dir().join(format!("vigil-rec-{}", uuid::Uuid::new_v4()));
-        let cam = root.join("cam1");
-        for day in ["2026-10-18", "2026-10-19", "2026-10-20", "2026-10-21"] {
-            std::fs::create_dir_all(cam.join(day)).unwrap();
-        }
-        let db = Db::open(root.join("t.db")).unwrap();
-
-        prune_expired_days_on(
-            &cam,
-            3,
-            &db,
-            "cam1",
-            NaiveDate::from_ymd_opt(2026, 10, 21).unwrap(),
-        );
-
-        assert!(!cam.join("2026-10-18").exists());
-        assert!(cam.join("2026-10-19").exists());
-        assert!(cam.join("2026-10-21").exists());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn the_fourth_day_deletes_that_days_clips_and_events() {
-        use std::time::SystemTime;
+    fn over_budget_deletes_the_oldest_named_recording() {
         use vigil_common::Event;
 
-        let root = std::env::temp_dir().join(format!("vigil-clips-{}", uuid::Uuid::new_v4()));
-        let clips = root.join("clips");
-        std::fs::create_dir_all(&clips).unwrap();
-        let db = Db::open(root.join("t.db")).unwrap();
-        let today = NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+        let root = std::env::temp_dir().join(format!("vigil-budget-{}", uuid::Uuid::new_v4()));
+        let data = root.join("data");
+        let recordings = data.join("recordings");
+        let oldest = recordings.join("cam1").join("2026-10-18").join("12-00-00.mp4");
+        let newest = recordings.join("cam1").join("2026-10-19").join("12-00-00.mp4");
+        let only = recordings.join("cam2").join("2026-10-17").join("08-00-00.mp4");
+        video(&oldest, 4000);
+        video(&newest, 4000);
+        video(&only, 4000);
+        let db = Db::open(data.join("vigil.db")).unwrap();
+        db.insert_segment("cam1", &oldest.to_string_lossy(), Utc::now())
+            .unwrap();
+
         let old_at = Local
             .with_ymd_and_hms(2026, 10, 18, 12, 0, 0)
             .unwrap()
@@ -341,51 +341,55 @@ mod tests {
             .with_ymd_and_hms(2026, 10, 19, 12, 0, 0)
             .unwrap()
             .with_timezone(&Utc);
-
         let old_id = uuid::Uuid::new_v4();
         let keep_id = uuid::Uuid::new_v4();
-        let old_clip = clips.join(format!("{old_id}.mp4"));
-        let old_txt = clips.join(format!("{old_id}.txt"));
-        let keep_clip = clips.join(format!("{keep_id}.mp4"));
-        let old_snap = root.join("old.jpg");
-        std::fs::write(&old_clip, b"old").unwrap();
-        std::fs::write(&old_txt, b"list").unwrap();
-        std::fs::write(&keep_clip, b"keep").unwrap();
-        std::fs::write(&old_snap, b"jpg").unwrap();
-        let orphan = clips.join("orphan.mp4");
-        std::fs::write(&orphan, b"orphan").unwrap();
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&orphan)
-            .unwrap()
-            .set_modified(SystemTime::from(old_at))
-            .unwrap();
-
-        let event = |id, start: DateTime<Utc>, clip: &Path, snap: Option<&Path>| Event {
+        let old_clip = data.join("clips").join(format!("{old_id}.mp4"));
+        let old_txt = data.join("clips").join(format!("{old_id}.txt"));
+        let keep_clip = data.join("clips").join(format!("{keep_id}.mp4"));
+        video(&old_clip, 100);
+        video(&old_txt, 10);
+        video(&keep_clip, 100);
+        let event = |id, start: DateTime<Utc>, clip: &Path| Event {
             id,
             camera: "cam1".into(),
             label: "dog".into(),
             score: 0.8,
             start_time: start,
             end_time: Some(start),
-            snapshot_path: snap.map(|p| p.to_string_lossy().to_string()),
+            snapshot_path: None,
             clip_path: Some(clip.to_string_lossy().to_string()),
             note: None,
         };
-        db.insert_event(&event(old_id, old_at, &old_clip, Some(&old_snap)))
-            .unwrap();
-        db.insert_event(&event(keep_id, keep_at, &keep_clip, None))
-            .unwrap();
+        db.insert_event(&event(old_id, old_at, &old_clip)).unwrap();
+        db.insert_event(&event(keep_id, keep_at, &keep_clip)).unwrap();
 
-        prune_expired_clips_and_events(&clips, 3, &db, today);
+        prune_videos_to(&data, &recordings, 1, &db);
 
+        assert!(!oldest.exists());
+        assert!(!recordings.join("cam1").join("2026-10-18").exists());
+        assert!(newest.exists());
+        assert!(only.exists(), "the only file of a camera is the one being written");
+        assert!(db.list_segments(Some("cam1"), None, None, 10, 0).unwrap().is_empty());
         assert!(!old_clip.exists());
         assert!(!old_txt.exists());
-        assert!(!old_snap.exists());
-        assert!(!orphan.exists());
         assert!(keep_clip.exists());
         assert!(db.get_event(&old_id.to_string()).unwrap().is_none());
         assert!(db.get_event(&keep_id.to_string()).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn under_budget_keeps_every_recording() {
+        let root = std::env::temp_dir().join(format!("vigil-budget-{}", uuid::Uuid::new_v4()));
+        let data = root.join("data");
+        let recordings = data.join("recordings");
+        let file = recordings.join("cam1").join("2026-10-18").join("12-00-00.mp4");
+        video(&file, 4000);
+        let db = Db::open(data.join("vigil.db")).unwrap();
+
+        prune_videos_to(&data, &recordings, 100 * 1024 * 1024 * 1024, &db);
+
+        assert!(file.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
