@@ -168,6 +168,13 @@ Page({
     }, 20000);
   },
 
+  onVideoPlay() {
+    if (this.unloaded || this.videoTimedOut) return;
+    this.stopVideoWait();
+    if (!this.data.playing) logger.info("video.playing", { code: 2004 });
+    this.setData({ playing: true, error: "" });
+  },
+
   onState(e) {
     if (this.unloaded || this.videoTimedOut) return;
     if (e.detail.code === 2004) {

@@ -269,9 +269,9 @@ pub async fn streams_play(
         return Err(AppError::unavailable("stream sharing disabled"));
     }
     let play = stream_sign::issue_play_url(&st.cfg.stream, &camera, Utc::now());
-    // live-player rejects a go2rtc URL that does not end in .flv. The bytes
-    // still come from go2rtc; this path only gives WeChat a name it will open.
-    let url = player_flv_url(&headers, &camera);
+    // Developer tools cannot play live-player FLV. The video component plays this
+    // HLS playlist; the segments are still the go2rtc stream.
+    let url = player_hls_url(&headers, &camera);
     Ok(Json(json!({
         "camera": camera,
         "url": url,
@@ -314,27 +314,112 @@ pub async fn streams_flv(
         .map_err(AppError::internal)
 }
 
-fn player_flv_url(headers: &HeaderMap, camera: &str) -> String {
+fn player_hls_url(headers: &HeaderMap, camera: &str) -> String {
     let host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .filter(|host| !host.is_empty())
         .unwrap_or("127.0.0.1:8970");
-    format!("http://{host}/flv/{camera}.flv")
+    format!("http://{host}/hls/{camera}.m3u8")
 }
 
-/// HTTP-FLV on the configured go2rtc API, the address the mini-program player uses.
-fn go2rtc_flv_url(api: &str, camera: &str) -> Option<String> {
+pub async fn streams_hls(
+    State(st): State<Arc<AppState>>,
+    Path(file): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(camera) = file.strip_suffix(".m3u8").filter(|name| !name.is_empty()) else {
+        return Err(AppError::not_found("camera not found"));
+    };
+    if !st.cfg.cameras.contains_key(camera) {
+        return Err(AppError::not_found("camera not found"));
+    }
+    let Some(base) = go2rtc_http_base(&st.cfg.go2rtc.api) else {
+        return Err(AppError::unavailable("go2rtc api is not configured"));
+    };
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(AppError::internal)?;
+    let master = client
+        .get(format!("{base}/api/stream.m3u8?src={camera}"))
+        .send()
+        .await
+        .map_err(AppError::internal)?
+        .error_for_status()
+        .map_err(AppError::internal)?
+        .text()
+        .await
+        .map_err(AppError::internal)?;
+    let Some(variant) = master
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+    else {
+        return Err(AppError::unavailable("go2rtc 没有这一路画面"));
+    };
+    let media_url = if variant.starts_with("http://") || variant.starts_with("https://") {
+        variant.to_string()
+    } else {
+        format!("{base}/api/{variant}")
+    };
+    let media = client
+        .get(media_url)
+        .send()
+        .await
+        .map_err(AppError::internal)?
+        .error_for_status()
+        .map_err(AppError::internal)?
+        .text()
+        .await
+        .map_err(AppError::internal)?;
+    let body = rewrite_hls_media(&media, &format!("{base}/api/hls"));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            "application/vnd.apple.mpegurl",
+        )
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(body))
+        .map_err(AppError::internal)
+}
+
+fn go2rtc_http_base(api: &str) -> Option<String> {
     let api = api.trim().trim_end_matches('/');
     if api.is_empty() {
         return None;
     }
-    let base = if api.starts_with("http://") || api.starts_with("https://") {
+    Some(if api.starts_with("http://") || api.starts_with("https://") {
         api.to_string()
     } else {
         format!("http://{api}")
-    };
-    Some(format!("{base}/api/stream.flv?src={camera}"))
+    })
+}
+
+/// Point each segment at go2rtc so the player does not resolve them against this host.
+fn rewrite_hls_media(body: &str, segment_base: &str) -> String {
+    let base = segment_base.trim_end_matches('/');
+    let mut out = String::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(line);
+        } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            out.push_str(trimmed);
+        } else {
+            out.push_str(base);
+            out.push('/');
+            out.push_str(trimmed.trim_start_matches('/'));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// HTTP-FLV on the configured go2rtc API, the address the mini-program player uses.
+fn go2rtc_flv_url(api: &str, camera: &str) -> Option<String> {
+    go2rtc_http_base(api).map(|base| format!("{base}/api/stream.flv?src={camera}"))
 }
 
 pub async fn boarding_records(
@@ -648,6 +733,14 @@ mod tests {
             Some("https://stream.example.com/api/stream.flv?src=cam1")
         );
         assert_eq!(super::go2rtc_flv_url("  ", "cam1"), None);
+    }
+
+    #[test]
+    fn hls_segments_point_at_go2rtc() {
+        let raw = "#EXTM3U\n#EXTINF:0.500,\nsegment.ts?id=abc&n=0\n";
+        let got = super::rewrite_hls_media(raw, "http://122.51.106.239:1984/api/hls");
+        assert!(got.contains("http://122.51.106.239:1984/api/hls/segment.ts?id=abc&n=0\n"));
+        assert!(got.contains("#EXTINF:0.500,"));
     }
 
     use super::*;
