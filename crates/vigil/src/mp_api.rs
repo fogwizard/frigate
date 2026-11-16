@@ -29,13 +29,12 @@ pub async fn login(
         .db
         .create_session(&openid, role, st.cfg.miniprogram.session_ttl_secs)
         .map_err(AppError::internal)?;
-    let (phone, wechat_id) = st.db.profile(&openid).map_err(AppError::internal)?;
+    let phone = st.db.profile(&openid).map_err(AppError::internal)?;
     Ok(Json(json!({
         "openid": openid,
         "token": token,
         "role": role,
         "phone": phone,
-        "wechatId": wechat_id,
     })))
 }
 
@@ -43,8 +42,6 @@ pub async fn login(
 pub struct ProfileBody {
     #[serde(default)]
     pub phone: String,
-    #[serde(default, rename = "wechatId")]
-    pub wechat_id: String,
 }
 
 pub async fn profile_get(
@@ -52,8 +49,8 @@ pub async fn profile_get(
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let session = session_from_headers(&st, &headers)?;
-    let (phone, wechat_id) = st.db.profile(&session.openid).map_err(AppError::internal)?;
-    Ok(Json(json!({ "phone": phone, "wechatId": wechat_id })))
+    let phone = st.db.profile(&session.openid).map_err(AppError::internal)?;
+    Ok(Json(json!({ "phone": phone })))
 }
 
 pub async fn profile_save(
@@ -63,23 +60,20 @@ pub async fn profile_save(
 ) -> Result<Json<Value>, AppError> {
     let session = session_from_headers(&st, &headers)?;
     let phone = normalize_phone(&body.phone)?;
-    let wechat_id = normalize_wechat(&body.wechat_id)?;
-    if phone.is_empty() && wechat_id.is_empty() {
-        return Err(AppError::bad_request("请填写手机号或微信号"));
+    if phone.is_empty() {
+        return Err(AppError::bad_request("请填写手机号"));
     }
     let claimed = st
         .db
-        .save_profile(&session.openid, &phone, &wechat_id)
+        .save_profile(&session.openid, &phone)
         .map_err(AppError::internal)?;
-    Ok(Json(json!({ "phone": phone, "wechatId": wechat_id, "claimed": claimed })))
+    Ok(Json(json!({ "phone": phone, "claimed": claimed })))
 }
 
 #[derive(Deserialize)]
 pub struct AssignBody {
     #[serde(default)]
     pub phone: String,
-    #[serde(default, rename = "wechatId")]
-    pub wechat_id: String,
     pub camera: String,
     #[serde(default)]
     pub number: String,
@@ -96,9 +90,8 @@ pub async fn boarding_assign(
         return Err(AppError::bad_request("未知镜头"));
     }
     let phone = normalize_phone(&body.phone)?;
-    let wechat_id = normalize_wechat(&body.wechat_id)?;
-    if phone.is_empty() && wechat_id.is_empty() {
-        return Err(AppError::bad_request("请填写手机号或微信号"));
+    if phone.is_empty() {
+        return Err(AppError::bad_request("请填写手机号"));
     }
     let number = if body.number.trim().is_empty() {
         body.camera.clone()
@@ -112,9 +105,9 @@ pub async fn boarding_assign(
     };
     let id = st
         .db
-        .assign_boarding(&phone, &wechat_id, &body.camera, &number, &label)
+        .assign_boarding(&phone, &body.camera, &number, &label)
         .map_err(AppError::internal)?;
-    Ok(Json(json!({ "id": id, "phone": phone, "wechatId": wechat_id, "camera": body.camera, "number": number, "label": label })))
+    Ok(Json(json!({ "id": id, "phone": phone, "camera": body.camera, "number": number, "label": label })))
 }
 
 pub async fn boarding_assigned(State(st): State<Arc<AppState>>) -> Result<Json<Value>, AppError> {
@@ -122,11 +115,10 @@ pub async fn boarding_assigned(State(st): State<Arc<AppState>>) -> Result<Json<V
     let rows = st.db.list_store_boarding().map_err(AppError::internal)?;
     let records: Vec<Value> = rows
         .into_iter()
-        .map(|(id, phone, wechat_id, camera, number, label)| {
+        .map(|(id, phone, camera, number, label)| {
             json!({
                 "id": id,
                 "phone": phone,
-                "wechatId": wechat_id,
                 "camera": camera,
                 "number": number,
                 "label": label,
@@ -149,17 +141,6 @@ fn normalize_phone(raw: &str) -> Result<String, AppError> {
         return Err(AppError::bad_request("手机号须为 11 位"));
     }
     Ok(digits.to_string())
-}
-
-fn normalize_wechat(raw: &str) -> Result<String, AppError> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Ok(String::new());
-    }
-    if s.chars().count() > 32 || s.chars().any(char::is_whitespace) {
-        return Err(AppError::bad_request("微信号不能含空格，且不超过 32 个字符"));
-    }
-    Ok(s.to_string())
 }
 
 #[derive(Deserialize)]
@@ -845,7 +826,6 @@ mod tests {
             State(st.clone()),
             Json(AssignBody {
                 phone: "13800138000".into(),
-                wechat_id: "shop_cat".into(),
                 camera: "cam1".into(),
                 number: "01".into(),
                 label: "寄养房 01".into(),
@@ -861,7 +841,6 @@ mod tests {
             auth(&user),
             Json(ProfileBody {
                 phone: "138-0013-8000".into(),
-                wechat_id: String::new(),
             }),
         )
         .await

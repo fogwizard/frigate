@@ -56,10 +56,9 @@
 
     <section id="page-boarding" class="page">
       <h1>寄养登记</h1>
-      <p class="hint">按顾客在小程序里填写的手机号或微信号添加。OpenID 不用填。</p>
+      <p class="hint">按顾客在小程序里填写的手机号添加。OpenID 不用填。</p>
       <form id="boarding-form" class="boarding-form">
-        <label>手机号 <input name="phone" inputmode="numeric" placeholder="11 位手机号"></label>
-        <label>微信号 <input name="wechatId" placeholder="和顾客填写的一致"></label>
+        <label>手机号 <input name="phone" inputmode="numeric" placeholder="11 位手机号" required></label>
         <label>镜头
           <select name="camera" id="boarding-camera" required></select>
         </label>
@@ -72,6 +71,6 @@
     </section>
   </main>
 
-    <script src="/app.js?v=19"></script>
+    <script src="/app.js?v=20"></script>
 </body>
 </html>

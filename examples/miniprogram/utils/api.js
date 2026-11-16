@@ -89,10 +89,10 @@ function request(path, options = {}) {
   });
 }
 
-function saveProfile(phone, wechatId) {
+function saveProfile(phone) {
   return request("/api/miniprogram/profile", {
     method: "POST",
-    data: { phone, wechatId },
+    data: { phone },
     operation: "profile",
   });
 }

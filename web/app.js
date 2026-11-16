@@ -118,8 +118,8 @@ async function loadBoarding() {
     const data = await fetch("/api/boarding/assigned").then((r) => r.json());
     const records = data.records || [];
     list.innerHTML = records.length
-      ? records.map((row) => `<div class="row"><div><strong>${row.label || row.camera}</strong><div class="sub">${[row.phone && "手机号 " + row.phone, row.wechatId && "微信号 " + row.wechatId, row.camera].filter(Boolean).join(" · ")}</div></div></div>`).join("")
-      : `<div class="empty">还没有按手机号或微信号登记的寄养</div>`;
+      ? records.map((row) => `<div class="row"><div><strong>${row.label || row.camera}</strong><div class="sub">${[row.phone && "手机号 " + row.phone, row.camera].filter(Boolean).join(" · ")}</div></div></div>`).join("")
+      : `<div class="empty">还没有按手机号登记的寄养</div>`;
     if (msg) msg.textContent = "";
   } catch (error) {
     if (msg) msg.textContent = error.message || "寄养列表加载失败";

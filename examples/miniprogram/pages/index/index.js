@@ -11,7 +11,7 @@ Page({
     error: "",
     openid: "",
     phone: "",
-    wechatId: "",
+    phoneDraft: "",
     contactBusy: false,
     loggedIn: false,
     loginBusy: false,
@@ -23,9 +23,10 @@ Page({
   },
 
   onShow() {
-    const { openid, doorPath } = getApp().globalData;
+    const { openid, phone, doorPath } = getApp().globalData;
     this.setData({
       openid,
+      phone: phone || "",
       loggedIn: Boolean(openid),
       doorConfigured: typeof doorPath === "string" && doorPath.startsWith("/") && !doorPath.startsWith("//"),
     });
@@ -47,14 +48,16 @@ Page({
         if (this.unloaded) return;
         const cameras = normalizeCameras(data);
         const cameraIndex = selected ? Math.max(0, cameras.findIndex((item) => item.camera === selected.camera)) : 0;
-        const openid = getApp().globalData.openid;
-        this.setData({ cameras, cameraIndex, isAdmin: data.isAdmin, loading: false, openid, loggedIn: Boolean(openid) });
+        const app = getApp();
+        const openid = app.globalData.openid;
+        this.setData({ cameras, cameraIndex, isAdmin: data.isAdmin, loading: false, openid, phone: app.globalData.phone || "", loggedIn: Boolean(openid) });
       })
       .catch((e) => {
         if (this.unloaded) return;
         logger.warn("home.load_failed", { statusCode: e.statusCode });
-        const openid = getApp().globalData.openid;
-        this.setData({ error: String(e.message || e), loading: false, cameras: [], openid, loggedIn: Boolean(openid) });
+        const app = getApp();
+        const openid = app.globalData.openid;
+        this.setData({ error: String(e.message || e), loading: false, cameras: [], openid, phone: app.globalData.phone || "", loggedIn: Boolean(openid) });
       });
   },
 
@@ -145,7 +148,6 @@ Page({
         this.setData({
           openid,
           phone: app.globalData.phone || "",
-          wechatId: app.globalData.wechatId || "",
           loggedIn: true,
           loginBusy: false,
         });
@@ -158,31 +160,25 @@ Page({
   },
 
   onPhone(event) {
-    this.setData({ phone: event.detail.value });
-  },
-
-  onWechat(event) {
-    this.setData({ wechatId: event.detail.value });
+    this.setData({ phoneDraft: event.detail.value });
   },
 
   saveContact() {
-    if (this.unloaded || this.data.contactBusy || !this.data.loggedIn) return;
-    const phone = this.data.phone.trim();
-    const wechatId = this.data.wechatId.trim();
-    if (!phone && !wechatId) {
-      wx.showToast({ title: "请填写手机号或微信号", icon: "none" });
+    if (this.unloaded || this.data.contactBusy || !this.data.loggedIn || this.data.phone) return;
+    const phone = this.data.phoneDraft.trim();
+    if (!phone) {
+      wx.showToast({ title: "请填写手机号", icon: "none" });
       return;
     }
     this.setData({ contactBusy: true, error: "" });
-    api.saveProfile(phone, wechatId)
+    api.saveProfile(phone)
       .then((saved) => {
         if (this.unloaded) return;
         const app = getApp();
         app.globalData.phone = saved.phone || "";
-        app.globalData.wechatId = saved.wechatId || "";
         this.setData({
           phone: app.globalData.phone,
-          wechatId: app.globalData.wechatId,
+          phoneDraft: "",
           contactBusy: false,
         });
         wx.showToast({ title: "已保存", icon: "success" });
