@@ -4,14 +4,22 @@ use crate::api::{AppError, AppState};
 use crate::mp_db::MpSession;
 use crate::stream_sign;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Mutex;
+
+/// go2rtc only advances an HLS session after its segments are read, and a new
+/// master request starts a new session stuck on the first second. Keep one
+/// media playlist URL per camera so the player refresh sees the same session.
+static HLS_MEDIA_URLS: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub async fn login(
     State(st): State<Arc<AppState>>,
@@ -325,6 +333,7 @@ fn player_hls_url(headers: &HeaderMap, camera: &str) -> String {
 
 pub async fn streams_hls(
     State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(file): Path<String>,
 ) -> Result<Response, AppError> {
     let Some(camera) = file.strip_suffix(".m3u8").filter(|name| !name.is_empty()) else {
@@ -336,21 +345,88 @@ pub async fn streams_hls(
     let Some(base) = go2rtc_http_base(&st.cfg.go2rtc.api) else {
         return Err(AppError::unavailable("go2rtc api is not configured"));
     };
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(AppError::internal)?;
-    let master = client
-        .get(format!("{base}/api/stream.m3u8?src={camera}"))
+    let client = hls_client()?;
+    let media = hls_media_body(&client, &base, camera).await?;
+    let host = request_host(&headers);
+    let body = rewrite_hls_media(&media, &format!("http://{host}/hls"));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            "application/vnd.apple.mpegurl",
+        )
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(body))
+        .map_err(AppError::internal)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct HlsSegmentQuery {
+    id: String,
+    n: u64,
+}
+
+pub async fn streams_hls_segment(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<HlsSegmentQuery>,
+) -> Result<Response, AppError> {
+    if !hls_session_id(&q.id) {
+        return Err(AppError::not_found("segment not found"));
+    }
+    let Some(base) = go2rtc_http_base(&st.cfg.go2rtc.api) else {
+        return Err(AppError::unavailable("go2rtc api is not configured"));
+    };
+    let upstream = format!("{base}/api/hls/segment.ts?id={}&n={}", q.id, q.n);
+    let client = hls_client()?;
+    let resp = client
+        .get(upstream)
         .send()
         .await
-        .map_err(AppError::internal)?
-        .error_for_status()
-        .map_err(AppError::internal)?
-        .text()
-        .await
         .map_err(AppError::internal)?;
+    if !resp.status().is_success() {
+        return Err(AppError::unavailable("go2rtc 没有这一段画面"));
+    }
+    let body = Body::from_stream(resp.bytes_stream());
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "video/MP2T")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(body)
+        .map_err(AppError::internal)
+}
+
+fn hls_client() -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(AppError::internal)
+}
+
+fn request_host(headers: &HeaderMap) -> String {
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .filter(|host| !host.is_empty())
+        .unwrap_or("127.0.0.1:8970")
+        .to_string()
+}
+
+async fn hls_media_body(
+    client: &reqwest::Client,
+    base: &str,
+    camera: &str,
+) -> Result<String, AppError> {
+    let cached = HLS_MEDIA_URLS.lock().await.get(camera).cloned();
+    if let Some(url) = cached {
+        if let Ok(body) = fetch_text(client, &url).await {
+            if body.contains("#EXTM3U") {
+                return Ok(body);
+            }
+        }
+        HLS_MEDIA_URLS.lock().await.remove(camera);
+    }
+    let master = fetch_text(client, &format!("{base}/api/stream.m3u8?src={camera}")).await?;
     let Some(variant) = master
         .lines()
         .map(str::trim)
@@ -363,8 +439,17 @@ pub async fn streams_hls(
     } else {
         format!("{base}/api/{variant}")
     };
-    let media = client
-        .get(media_url)
+    let body = fetch_text(client, &media_url).await?;
+    HLS_MEDIA_URLS
+        .lock()
+        .await
+        .insert(camera.to_string(), media_url);
+    Ok(body)
+}
+
+async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, AppError> {
+    client
+        .get(url)
         .send()
         .await
         .map_err(AppError::internal)?
@@ -372,17 +457,15 @@ pub async fn streams_hls(
         .map_err(AppError::internal)?
         .text()
         .await
-        .map_err(AppError::internal)?;
-    let body = rewrite_hls_media(&media, &format!("{base}/api/hls"));
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(
-            header::CONTENT_TYPE,
-            "application/vnd.apple.mpegurl",
-        )
-        .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::from(body))
         .map_err(AppError::internal)
+}
+
+fn hls_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn go2rtc_http_base(api: &str) -> Option<String> {
@@ -397,7 +480,8 @@ fn go2rtc_http_base(api: &str) -> Option<String> {
     })
 }
 
-/// Point each segment at go2rtc so the player does not resolve them against this host.
+/// Point each segment at this server. The video component then stays on the
+/// same host that served the playlist, and reading a segment advances go2rtc.
 fn rewrite_hls_media(body: &str, segment_base: &str) -> String {
     let base = segment_base.trim_end_matches('/');
     let mut out = String::new();
@@ -405,6 +489,10 @@ fn rewrite_hls_media(body: &str, segment_base: &str) -> String {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             out.push_str(line);
+        } else if let Some(query) = hls_segment_query(trimmed) {
+            out.push_str(base);
+            out.push_str("/segment.ts?");
+            out.push_str(query);
         } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             out.push_str(trimmed);
         } else {
@@ -415,6 +503,15 @@ fn rewrite_hls_media(body: &str, segment_base: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+fn hls_segment_query(line: &str) -> Option<&str> {
+    let query = line.split_once("segment.ts?")?.1;
+    if query.contains("id=") && query.contains("n=") {
+        Some(query)
+    } else {
+        None
+    }
 }
 
 /// HTTP-FLV on the configured go2rtc API, the address the mini-program player uses.
@@ -736,11 +833,23 @@ mod tests {
     }
 
     #[test]
-    fn hls_segments_point_at_go2rtc() {
+    fn hls_segments_stay_on_the_player_host() {
         let raw = "#EXTM3U\n#EXTINF:0.500,\nsegment.ts?id=abc&n=0\n";
-        let got = super::rewrite_hls_media(raw, "http://122.51.106.239:1984/api/hls");
-        assert!(got.contains("http://122.51.106.239:1984/api/hls/segment.ts?id=abc&n=0\n"));
+        let got = super::rewrite_hls_media(raw, "http://192.168.1.13:8970/hls");
+        assert!(got.contains("http://192.168.1.13:8970/hls/segment.ts?id=abc&n=0\n"));
         assert!(got.contains("#EXTINF:0.500,"));
+        let absolute = "#EXTM3U\nhttp://122.51.106.239:1984/api/hls/segment.ts?id=abc&n=1\n";
+        let rewritten = super::rewrite_hls_media(absolute, "http://192.168.1.13:8970/hls");
+        assert!(rewritten.contains("http://192.168.1.13:8970/hls/segment.ts?id=abc&n=1\n"));
+        assert!(!rewritten.contains("122.51.106.239"));
+    }
+
+    #[test]
+    fn hls_session_id_is_narrow() {
+        assert!(super::hls_session_id("abc_12-Z"));
+        assert!(!super::hls_session_id(""));
+        assert!(!super::hls_session_id("../x"));
+        assert!(!super::hls_session_id("a b"));
     }
 
     use super::*;

@@ -34,8 +34,8 @@
         autoplay
         muted
         object-fit="contain"
-        show-center-play-btn="{{false}}"
-        controls="{{false}}"
+        show-center-play-btn="{{true}}"
+        controls="{{true}}"
         bindplay="onVideoPlay"
         binderror="onPlayerError"
       />
