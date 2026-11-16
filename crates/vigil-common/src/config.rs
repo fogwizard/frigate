@@ -550,7 +550,9 @@ pub struct StreamConfig {
     /// FFmpeg publish URL template, e.g. `rtsp://127.0.0.1:8554/{camera}`.
     #[serde(default = "default_stream_publish_url")]
     pub publish_url_template: String,
-    /// Public HTTPS FLV origin (Nginx → go2rtc HTTP-FLV), no trailing slash.
+    /// Public origin the phone uses to play video, no trailing slash.
+    /// Caddy on the go2rtc machine serves `/{camera}.m3u8` here.
+    /// Replace with `https://rujibao.cn` when that name has a certificate.
     #[serde(default = "default_stream_public_base")]
     pub public_base: String,
     /// Path template; `{camera}` replaced with camera name (e.g. `/{camera}` → `/cam1`).

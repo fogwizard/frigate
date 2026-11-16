@@ -277,10 +277,10 @@ pub async fn streams_play(
         return Err(AppError::unavailable("stream sharing disabled"));
     }
     let play = stream_sign::issue_play_url(&st.cfg.stream, &camera, Utc::now());
-    // The phone pulls this from Caddy on the go2rtc machine. Caddy maps
-    // /{camera}.m3u8 to go2rtc and keeps the segments on that same public host.
-    let Some(url) = wechat_play_url(&st.cfg.go2rtc.api, &camera) else {
-        return Err(AppError::unavailable("go2rtc api is not configured"));
+    // stream.public_base is the Caddy origin. It is http://122.51.106.239 today
+    // and becomes https://rujibao.cn when the domain is ready.
+    let Some(url) = wechat_play_url(&st.cfg.stream.public_base, &camera) else {
+        return Err(AppError::unavailable("stream public_base is not configured"));
     };
     Ok(Json(json!({
         "camera": camera,
@@ -324,15 +324,13 @@ pub async fn streams_flv(
         .map_err(AppError::internal)
 }
 
-/// Public playlist on port 80. Not the LAN host, and not go2rtc's `:1984/api/…?src=` URL.
-fn wechat_play_url(api: &str, camera: &str) -> Option<String> {
-    let base = go2rtc_http_base(api)?;
-    let authority = base.split("://").nth(1)?;
-    let host = authority.split(['/', ':']).next().unwrap_or("");
-    if host.is_empty() {
+/// `{public_base}/{camera}.m3u8`, the address Caddy publishes for the phone.
+fn wechat_play_url(public_base: &str, camera: &str) -> Option<String> {
+    let base = public_base.trim().trim_end_matches('/');
+    if base.is_empty() || !(base.starts_with("http://") || base.starts_with("https://")) {
         return None;
     }
-    Some(format!("http://{host}/{camera}.m3u8"))
+    Some(format!("{base}/{camera}.m3u8"))
 }
 
 pub async fn streams_hls(
@@ -826,12 +824,12 @@ mod tests {
     #[test]
     fn wechat_play_url_is_the_public_caddy_playlist() {
         assert_eq!(
-            super::wechat_play_url("122.51.106.239:1984", "cam1").as_deref(),
+            super::wechat_play_url("http://122.51.106.239", "cam1").as_deref(),
             Some("http://122.51.106.239/cam1.m3u8")
         );
         assert_eq!(
-            super::wechat_play_url("https://stream.example.com/", "cam1").as_deref(),
-            Some("http://stream.example.com/cam1.m3u8")
+            super::wechat_play_url("https://rujibao.cn/", "cam1").as_deref(),
+            Some("https://rujibao.cn/cam1.m3u8")
         );
         assert_eq!(super::wechat_play_url("  ", "cam1"), None);
     }

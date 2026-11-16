@@ -7,8 +7,12 @@
 # The master playlist's relative line "hls/playlist.m3u8?id=…" resolves to /hls/…
 # and that playlist's "segment.ts?…" resolves to /hls/segment.ts. No body rewrite.
 #
+# The phone-facing origin is stream.public_base in config/default.yaml.
+# It is http://122.51.106.239 today. When the certificate is ready, change
+# that value to https://rujibao.cn and replace this site address `:80`
+# with `rujibao.cn` (delete the auto_https off block so Caddy can issue TLS).
+#
 # Install on the server, then: sudo systemctl reload caddy
-# Port 80 on this host already accepts connections; nothing is listening there yet.
 
 {
 	auto_https off

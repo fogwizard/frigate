@@ -121,10 +121,11 @@ stream:
   restream: true
   # Must match go2rtc rtsp.listen + stream name (publisher)
   publish_url_template: "rtsp://122.51.106.239:8554/{camera}"
-  # Nginx maps /{camera}.flv → go2rtc /api/stream.flv?src={camera}
-  public_base: "https://stream.example.com"
+  # 手机播放用的 Caddy 地址，不要带端口，也不要带 ?src=。
+  # 域名证书就绪后只改这一行：https://rujibao.cn
+  public_base: "http://122.51.106.239"
   path_template: "/{camera}"
-  # 网页预览仍用 go2rtc 的 HTTP-FLV。小程序播放地址由 Caddy 的 /{camera}.m3u8 给出。
+  # 本机网页预览仍走 go2rtc 的 HTTP-FLV，不给小程序用。
   play_url_template: "http://122.51.106.239:1984/api/stream.flv?src={camera}"
   sign_secret: "change-me"
   sign_ttl_secs: 120
