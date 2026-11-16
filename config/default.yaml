@@ -158,7 +158,7 @@ miniprogram:
   admin_openids: ["demo-admin"]
   # Empty = admin canControl all cameras in demo
   control_cameras: []
-  wechat_app_id: ""
+  wechat_app_id: "wxf0f322b8b47eb741"
   wechat_app_secret: ""
   session_ttl_secs: 86400
 
