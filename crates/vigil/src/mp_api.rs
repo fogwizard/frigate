@@ -3,8 +3,10 @@
 use crate::api::{AppError, AppState};
 use crate::mp_db::MpSession;
 use crate::stream_sign;
+use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
@@ -267,11 +269,72 @@ pub async fn streams_play(
         return Err(AppError::unavailable("stream sharing disabled"));
     }
     let play = stream_sign::issue_play_url(&st.cfg.stream, &camera, Utc::now());
+    // live-player rejects a go2rtc URL that does not end in .flv. The bytes
+    // still come from go2rtc; this path only gives WeChat a name it will open.
+    let url = player_flv_url(&headers, &camera);
     Ok(Json(json!({
         "camera": camera,
-        "url": play.url,
+        "url": url,
         "expires_at": play.expires_at,
     })))
+}
+
+pub async fn streams_flv(
+    State(st): State<Arc<AppState>>,
+    Path(file): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(camera) = file.strip_suffix(".flv").filter(|name| !name.is_empty()) else {
+        return Err(AppError::not_found("camera not found"));
+    };
+    if !st.cfg.cameras.contains_key(camera) {
+        return Err(AppError::not_found("camera not found"));
+    }
+    let Some(upstream) = go2rtc_flv_url(&st.cfg.go2rtc.api, camera) else {
+        return Err(AppError::unavailable("go2rtc api is not configured"));
+    };
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(6 * 60 * 60))
+        .build()
+        .map_err(AppError::internal)?;
+    let resp = client
+        .get(upstream)
+        .send()
+        .await
+        .map_err(AppError::internal)?;
+    if !resp.status().is_success() {
+        return Err(AppError::unavailable("go2rtc 没有这一路画面"));
+    }
+    let body = Body::from_stream(resp.bytes_stream());
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "video/x-flv")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(body)
+        .map_err(AppError::internal)
+}
+
+fn player_flv_url(headers: &HeaderMap, camera: &str) -> String {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .filter(|host| !host.is_empty())
+        .unwrap_or("127.0.0.1:8970");
+    format!("http://{host}/flv/{camera}.flv")
+}
+
+/// HTTP-FLV on the configured go2rtc API, the address the mini-program player uses.
+fn go2rtc_flv_url(api: &str, camera: &str) -> Option<String> {
+    let api = api.trim().trim_end_matches('/');
+    if api.is_empty() {
+        return None;
+    }
+    let base = if api.starts_with("http://") || api.starts_with("https://") {
+        api.to_string()
+    } else {
+        format!("http://{api}")
+    };
+    Some(format!("{base}/api/stream.flv?src={camera}"))
 }
 
 pub async fn boarding_records(
@@ -574,6 +637,19 @@ pub async fn door_open(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn play_url_uses_the_go2rtc_api() {
+        assert_eq!(
+            super::go2rtc_flv_url("122.51.106.239:1984", "cam1").as_deref(),
+            Some("http://122.51.106.239:1984/api/stream.flv?src=cam1")
+        );
+        assert_eq!(
+            super::go2rtc_flv_url("https://stream.example.com/", "cam1").as_deref(),
+            Some("https://stream.example.com/api/stream.flv?src=cam1")
+        );
+        assert_eq!(super::go2rtc_flv_url("  ", "cam1"), None);
+    }
+
     use super::*;
     use crate::db::Db;
     use crate::detect::new_status_map;

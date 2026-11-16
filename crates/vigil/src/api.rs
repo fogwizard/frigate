@@ -49,6 +49,7 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
         .route("/api/streams", get(crate::mp_api::streams_list))
         .route("/api/streams/auth", get(streams_auth))
         .route("/api/streams/{camera}/play", get(crate::mp_api::streams_play))
+        .route("/flv/{file}", get(crate::mp_api::streams_flv))
         .route("/api/boarding/records", get(crate::mp_api::boarding_records))
         .route("/api/boarding/assign", post(crate::mp_api::boarding_assign))
         .route("/api/boarding/assigned", get(crate::mp_api::boarding_assigned))

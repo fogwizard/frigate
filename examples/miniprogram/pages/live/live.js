@@ -188,8 +188,12 @@ Page({
   onPlayerError(e) {
     if (this.unloaded || this.videoTimedOut) return;
     this.stopVideoWait();
-    logger.error("video.player_failed", { code: e.detail && e.detail.errCode });
-    this.setData({ playing: false, error: "视频暂时无法播放，请刷新重试" });
+    const code = e.detail && e.detail.errCode;
+    logger.error("video.player_failed", { code });
+    this.setData({
+      playing: false,
+      error: typeof code === "number" ? `视频暂时无法播放（${code}）` : "视频暂时无法播放，请刷新重试",
+    });
   },
 
   manualFeed() {

@@ -376,6 +376,16 @@ async fn spawn_combined_ffmpeg(
             );
         }
     }
+    // WeChat live-player rejects a video-only FLV. This silent track is only
+    // published to go2rtc; recordings and detection stay video-only.
+    if do_restream {
+        args.extend([
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "anullsrc=channel_layout=mono:sample_rate=8000".into(),
+        ]);
+    }
 
     // Output 0: recording — copy for RTSP; re-encode for USB.
     args.extend(["-map".into(), "0:v:0".into(), "-an".into()]);
@@ -426,7 +436,7 @@ async fn spawn_combined_ffmpeg(
     if do_restream {
         let publish = cfg.stream.publish_url(camera);
         info!(camera = %camera, %publish, "ffmpeg restream to go2rtc");
-        args.extend(["-map".into(), "0:v:0".into(), "-an".into()]);
+        args.extend(["-map".into(), "0:v:0".into()]);
         if usb_mode {
             args.extend([
                 "-c:v".into(),
@@ -443,8 +453,20 @@ async fn spawn_combined_ffmpeg(
                 "yuv420p".into(),
             ]);
         } else {
-            args.extend(["-c".into(), "copy".into()]);
+            args.extend(["-c:v".into(), "copy".into()]);
         }
+        args.extend([
+            "-map".into(),
+            "1:a:0".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            "32k".into(),
+            "-ar".into(),
+            "8000".into(),
+            "-ac".into(),
+            "1".into(),
+        ]);
         args.extend([
             "-muxdelay".into(),
             "0".into(),
