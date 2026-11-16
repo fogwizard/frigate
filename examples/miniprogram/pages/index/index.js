@@ -26,7 +26,7 @@ Page({
       loggedIn: Boolean(openid),
       doorConfigured: typeof doorPath === "string" && doorPath.startsWith("/") && !doorPath.startsWith("//"),
     });
-    if (!this.data.doorBusy) this.reload();
+    if (openid && !this.data.doorBusy && !this.data.loginBusy) this.reload();
   },
 
   onUnload() {
@@ -134,11 +134,12 @@ Page({
     app.globalData.sessionToken = "";
     app.globalData.openid = "";
     app.globalData.role = "user";
-    this.setData({ loginBusy: true, error: "", openid: "", loggedIn: false });
+    this.setData({ loginBusy: true, error: "" });
     return app.login()
       .then((openid) => {
         if (this.unloaded) return;
-        this.setData({ openid, loggedIn: Boolean(openid), loginBusy: false });
+        if (!openid) throw new Error("微信登录未返回 OpenID");
+        this.setData({ openid, loggedIn: true, loginBusy: false });
         return this.reload();
       })
       .catch((error) => {

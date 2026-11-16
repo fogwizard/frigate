@@ -3,8 +3,9 @@ const logger = require("./utils/logger");
 
 App({
   globalData: {
-    // 本地 Vigil。播放地址由 /api/streams/{camera}/play 返回 go2rtc HTTP-FLV。
-    apiBase: "http://127.0.0.1:8970",
+    // 开发者工具在 Windows 上时，127.0.0.1 指的是那台电脑，连不到这台 Mac。
+    // 播放地址由 /api/streams/{camera}/play 返回 go2rtc HTTP-FLV。
+    apiBase: "http://192.168.1.13:8970",
     loginPath: "/api/miniprogram/login",
     feedPath: "/api/feeding",
     waterPath: "/api/watering",

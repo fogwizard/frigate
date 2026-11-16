@@ -17,8 +17,16 @@
 }
 
 .account-id {
+  display: block;
   font-size: 36rpx;
   font-weight: 600;
+}
+
+.openid-line {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #67726f;
   word-break: break-all;
 }
 

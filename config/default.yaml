@@ -153,13 +153,14 @@ feed:
 # Mini-program login / boarding / door / feed / water (see examples/miniprogram)
 miniprogram:
   enabled: true
-  demo_mode: true
+  # false 时用下面的 AppID 和 AppSecret 向微信换真实 OpenID。
+  demo_mode: false
   demo_openid: "demo-admin"
   admin_openids: ["demo-admin"]
   # Empty = admin canControl all cameras in demo
   control_cameras: []
   wechat_app_id: "wxf0f322b8b47eb741"
-  wechat_app_secret: ""
+  wechat_app_secret: "0ad9dc0cfa05d063fed5925e32933ed9"
   session_ttl_secs: 86400
 
 paths:

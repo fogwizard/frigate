@@ -1,7 +1,8 @@
 <view class="account-bar">
   <view class="account-copy">
-    <text class="hint">{{loggedIn ? '已使用微信 OpenID 登录' : '登录后办理寄养和门店服务'}}</text>
-    <text class="account-id" selectable>{{openid || (loginBusy || loading ? '正在登录' : '未登录')}}</text>
+    <text class="hint">微信 OpenID</text>
+    <text class="account-id">{{loginBusy ? '正在登录' : (loggedIn ? '已登录' : '未登录')}}</text>
+    <text wx:if="{{loggedIn && openid}}" class="openid-line" selectable>{{openid}}</text>
   </view>
   <button class="login-button" bindtap="loginWithWechat" loading="{{loginBusy}}" disabled="{{loginBusy}}">
     {{loggedIn ? '重新登录' : '微信登录'}}
