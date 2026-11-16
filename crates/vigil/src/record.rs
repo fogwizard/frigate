@@ -138,7 +138,7 @@ pub fn enforce_data_budget(cfg: &Config, db: &Db) -> anyhow::Result<()> {
 /// is still over `limit`. Events older than a camera's oldest kept recording go
 /// with the files that were removed.
 fn prune_videos_to(data_dir: &Path, recordings: &Path, limit: u64, db: &Db) {
-    let mut used = dir_size(data_dir);
+    let mut used = data_dir_bytes(data_dir);
     if used <= limit {
         return;
     }
@@ -225,7 +225,7 @@ fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-fn dir_size(root: &Path) -> u64 {
+pub(crate) fn data_dir_bytes(root: &Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {

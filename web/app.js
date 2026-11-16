@@ -104,6 +104,13 @@ document.querySelectorAll("nav button").forEach((btn) => {
   btn.addEventListener("click", () => switchPage(btn.dataset.page));
 });
 
+function formatDataBudget(bytes, maxGb) {
+  const gb = Number(bytes) / (1024 * 1024 * 1024);
+  const shown = gb >= 10 ? String(Math.round(gb)) : String(Math.round(gb * 10) / 10);
+  const cap = Number(maxGb);
+  return `${shown}/${Number.isFinite(cap) ? cap : 0}G`;
+}
+
 function formatCountdown(secs) {
   const s = Math.max(0, Math.floor(Number(secs) || 0));
   const pad = (n) => String(n).padStart(2, "0");
@@ -116,7 +123,7 @@ async function refreshHealth() {
     const r = await fetch("/api/status");
     const j = await r.json();
     const infer = j.health.infer_connected ? "infer✓" : "infer✗";
-    el.textContent = `v${j.health.version} · ${j.health.cameras} cams · ${infer} · up ${j.health.uptime_secs}s`;
+    el.textContent = `v${j.health.version} · ${j.health.cameras} cams · ${infer} · up ${j.health.uptime_secs}s · ${formatDataBudget(j.health.data_bytes, j.health.max_gb)}`;
     el.className = "health " + (j.health.ok ? "ok" : "bad");
     const serial = $("#feed-serial");
     if (serial) {

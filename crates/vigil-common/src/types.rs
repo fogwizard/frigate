@@ -41,6 +41,12 @@ pub struct HealthStatus {
     pub cameras: usize,
     pub infer_connected: bool,
     pub uptime_secs: u64,
+    /// Current size of `paths.data_dir`, in bytes.
+    #[serde(default)]
+    pub data_bytes: u64,
+    /// `record.max_gb`. The page shows `data_bytes` against this cap.
+    #[serde(default)]
+    pub max_gb: u64,
     /// `unspecified`, `open_failed`, or `connected`.
     #[serde(default = "default_feed_serial")]
     pub feed_serial: String,

@@ -10,8 +10,8 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -67,6 +67,29 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
         .with_state(state)
 }
 
+async fn data_dir_bytes_cached(dir: &std::path::Path) -> u64 {
+    const FRESH: Duration = Duration::from_secs(5);
+    static CACHE: Mutex<Option<(Instant, PathBuf, u64)>> = Mutex::new(None);
+    {
+        let slot = CACHE.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some((at, path, bytes)) = slot.as_ref() {
+            if path == dir && at.elapsed() < FRESH {
+                return *bytes;
+            }
+        }
+    }
+    let dir = dir.to_path_buf();
+    let measured = tokio::task::spawn_blocking({
+        let dir = dir.clone();
+        move || crate::record::data_dir_bytes(&dir)
+    })
+    .await
+    .unwrap_or(0);
+    let mut slot = CACHE.lock().unwrap_or_else(|err| err.into_inner());
+    *slot = Some((Instant::now(), dir, measured));
+    measured
+}
+
 async fn health_status(st: &AppState) -> HealthStatus {
     HealthStatus {
         ok: true,
@@ -74,6 +97,8 @@ async fn health_status(st: &AppState) -> HealthStatus {
         cameras: st.cfg.cameras.len(),
         infer_connected: *st.infer_connected.read().await,
         uptime_secs: st.started.elapsed().as_secs(),
+        data_bytes: data_dir_bytes_cached(&st.cfg.paths.data_dir).await,
+        max_gb: st.cfg.record.max_gb,
         feed_serial: vigil_modbus::serial_link().to_string(),
         feed_in_secs: crate::feed::secs_until_next_feed(Utc::now()),
         feed_trying: crate::feed::feeding_in_progress(&st.cfg, &st.db, Utc::now()),
