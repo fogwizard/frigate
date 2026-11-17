@@ -142,7 +142,7 @@ stream:
 # 喂食录像剪好后交给本机 Qwen 视觉模型判断粮食有没有出来。
 # base_url 是 OpenAI 兼容接口，model 要和本机服务里的模型名一致。
 feed:
-  port: "COM5"      # Windows: COM3   Linux: /dev/ttyUSB0 ；启动时打开，退出时关闭
+  port: "/dev/cu.usbserial-110"  # macOS cu.*；Windows COM3；Linux /dev/ttyUSB0。空=不写串口
   baud: 9600
   function: 6       # 5=写线圈  6=写单个寄存器
   address: 0
