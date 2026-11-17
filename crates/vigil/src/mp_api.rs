@@ -324,14 +324,15 @@ pub async fn streams_flv(
         .map_err(AppError::internal)
 }
 
-/// `{public_base}/{camera}.flv`, the address Caddy publishes for live-player.
-/// go2rtc HLS sessions die after a couple of short segments, so the phone uses FLV.
+/// `{public_base}/{camera}.m3u8`, the address Caddy publishes for `<video>`.
+/// `live-player` needs account permission and is unsupported in DevTools; the phone
+/// uses HLS through the public Caddy origin instead.
 fn wechat_play_url(public_base: &str, camera: &str) -> Option<String> {
     let base = public_base.trim().trim_end_matches('/');
     if base.is_empty() || !(base.starts_with("http://") || base.starts_with("https://")) {
         return None;
     }
-    Some(format!("{base}/{camera}.flv"))
+    Some(format!("{base}/{camera}.m3u8"))
 }
 
 pub async fn streams_hls(
@@ -823,14 +824,14 @@ pub async fn door_open(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn wechat_play_url_is_the_public_caddy_flv() {
+    fn wechat_play_url_is_the_public_caddy_playlist() {
         assert_eq!(
             super::wechat_play_url("http://122.51.106.239", "cam1").as_deref(),
-            Some("http://122.51.106.239/cam1.flv")
+            Some("http://122.51.106.239/cam1.m3u8")
         );
         assert_eq!(
             super::wechat_play_url("https://rujibao.cn/", "cam1").as_deref(),
-            Some("https://rujibao.cn/cam1.flv")
+            Some("https://rujibao.cn/cam1.m3u8")
         );
         assert_eq!(super::wechat_play_url("  ", "cam1"), None);
     }

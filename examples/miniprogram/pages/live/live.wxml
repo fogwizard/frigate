@@ -25,16 +25,17 @@
       </view>
     </view>
     <view class="video-frame">
-      <live-player
+      <video
         wx:if="{{flvUrl}}"
         id="player"
         class="player"
         src="{{flvUrl}}"
-        mode="live"
         autoplay
         muted
         object-fit="contain"
-        bindstatechange="onState"
+        show-center-play-btn="{{true}}"
+        controls="{{true}}"
+        bindplay="onVideoPlay"
         binderror="onPlayerError"
       />
       <view wx:else class="video-placeholder">
