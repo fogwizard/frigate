@@ -125,13 +125,20 @@ Page({
     this.playRequest = playRequest;
     this.stopVideoWait();
     this.videoTimedOut = false;
+    // Clearing src destroys live-player and can fire a spurious binderror.
+    this.ignoringPlayerError = true;
     this.setData({ loading: true, error: "", flvUrl: "", playing: false });
     return api
       .playUrl(camera)
       .then((data) => {
         if (this.unloaded || this.playRequest !== playRequest) return;
-        this.setData({ flvUrl: data.url || "", loading: false });
-        if (!data.url) {
+        const url = data.url || "";
+        this.ignoringPlayerError = false;
+        this.setData({ flvUrl: url, loading: false }, () => {
+          if (this.unloaded || this.playRequest !== playRequest || !url) return;
+          this.startLivePlayer();
+        });
+        if (!url) {
           logger.warn("video.url_missing", { operation: "play", outcome: "failed" });
           this.setData({ error: "play 未返回 url" });
         } else {
@@ -140,9 +147,34 @@ Page({
       })
       .catch((e) => {
         if (this.unloaded || this.playRequest !== playRequest) return;
+        this.ignoringPlayerError = false;
         if (e.statusCode === 401 || e.statusCode === 403) this.clearAccess();
         this.setData({ error: String(e.message || e), loading: false });
       });
+  },
+
+  startLivePlayer() {
+    if (this.unloaded || !this.data.flvUrl) return;
+    try {
+      const ctx = wx.createLivePlayerContext("player", this);
+      ctx.stop({
+        complete: () => {
+          if (this.unloaded || !this.data.flvUrl) return;
+          ctx.play({
+            fail: (err) => {
+              const code = Number(err && err.errCode);
+              logger.error("video.player_failed", {
+                code: Number.isFinite(code) ? code : undefined,
+                operation: "play",
+                outcome: "failed",
+              });
+            },
+          });
+        },
+      });
+    } catch (_) {
+      // createLivePlayerContext is unavailable in DevTools; binderror covers the phone.
+    }
   },
 
   stopVideoWait() {
@@ -187,13 +219,15 @@ Page({
   },
 
   onPlayerError(e) {
-    if (this.unloaded || this.videoTimedOut) return;
+    if (this.unloaded || this.videoTimedOut || this.ignoringPlayerError || !this.data.flvUrl) return;
     this.stopVideoWait();
-    const code = e.detail && e.detail.errCode;
-    logger.error("video.player_failed", { code });
+    const raw = e && e.detail ? e.detail.errCode : undefined;
+    const code = typeof raw === "number" ? raw : Number(raw);
+    const safeCode = Number.isFinite(code) ? code : undefined;
+    logger.error("video.player_failed", { code: safeCode, operation: "play", outcome: "failed" });
     this.setData({
       playing: false,
-      error: typeof code === "number" ? `视频暂时无法播放（${code}）` : "视频暂时无法播放，请刷新重试",
+      error: safeCode !== undefined ? `视频暂时无法播放（${safeCode}）` : "视频暂时无法播放，请用真机调试（开发者工具不支持 live-player）",
     });
   },
 

@@ -6,7 +6,8 @@ const outcomes = new Set(["started", "success", "failed", "cancelled", "denied",
 function write(level, event, details = {}) {
   const fields = {};
   for (const key of numericFields) {
-    if (typeof details[key] === "number" && Number.isFinite(details[key])) fields[key] = details[key];
+    const value = typeof details[key] === "number" ? details[key] : Number(details[key]);
+    if (Number.isFinite(value)) fields[key] = value;
   }
   for (const key of booleanFields) {
     if (typeof details[key] === "boolean") fields[key] = details[key];

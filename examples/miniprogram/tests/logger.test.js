@@ -50,7 +50,7 @@ test("player errors log only a numeric error code and not the raw detail", (cont
   let definition;
   global.Page = (page) => { definition = page; };
   require("../pages/live/live");
-  const page = { ...definition, data: { ...definition.data }, setData(update) { Object.assign(this.data, update); } };
+  const page = { ...definition, data: { ...definition.data, flvUrl: "test.flv" }, setData(update) { Object.assign(this.data, update); } };
   page.onPlayerError({ detail: { errCode: -1, errMsg: "secret-player-url", url: "secret-stream" } });
   assert.equal(output[0][1].code, -1);
   assert.doesNotMatch(JSON.stringify(output), /secret/);

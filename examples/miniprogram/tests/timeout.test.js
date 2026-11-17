@@ -136,6 +136,7 @@ test("unloading clears the video timeout without late page writes", (context) =>
   page.setData = () => assert.fail("Unexpected late update");
   context.mock.timers.tick(30000);
   page.onState({ detail: { code: 2004 } });
+  page.data.flvUrl = "test.flv";
   page.onPlayerError({ detail: { errCode: -1 } });
 });
 
