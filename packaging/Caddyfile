@@ -43,10 +43,14 @@
 	}
 
 	handle_path /hls/* {
+		# Same as FLV: WeChat sends Range: bytes=0- on segments; go2rtc live
+		# HLS ignores Range and the player aborts mid-download.
+		request_header -Range
 		rewrite * /api/hls{uri}
 		reverse_proxy 127.0.0.1:1984 {
 			flush_interval -1
 			header_up Host {upstream_hostport}
+			header_down -Accept-Ranges
 		}
 	}
 

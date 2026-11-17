@@ -277,11 +277,10 @@ pub async fn streams_play(
         return Err(AppError::unavailable("stream sharing disabled"));
     }
     let play = stream_sign::issue_play_url(&st.cfg.stream, &camera, Utc::now());
-    // stream.public_base is the Caddy origin. It is http://122.51.106.239 today
-    // and becomes https://rujibao.cn when the domain is ready.
-    let Some(url) = wechat_play_url(&st.cfg.stream.public_base, &camera) else {
-        return Err(AppError::unavailable("stream public_base is not configured"));
-    };
+    // Pin one go2rtc HLS media playlist per camera and hand the phone that
+    // URL on public_base. A fresh /{camera}.m3u8 master opens a new session
+    // that never advances, so <video> waits 20s and times out.
+    let url = wechat_hls_play_url(&st.cfg.stream.public_base, &st.cfg.go2rtc.api, &camera).await?;
     Ok(Json(json!({
         "camera": camera,
         "url": url,
@@ -324,9 +323,46 @@ pub async fn streams_flv(
         .map_err(AppError::internal)
 }
 
-/// `{public_base}/{camera}.m3u8`, the address Caddy publishes for `<video>`.
-/// `live-player` needs account permission and is unsupported in DevTools; the phone
-/// uses HLS through the public Caddy origin instead.
+/// Public media playlist for `<video>`: `{public_base}/hls/playlist.m3u8?id=…`.
+/// Relative `segment.ts` lines then stay on the same Caddy host under `/hls/`.
+async fn wechat_hls_play_url(
+    public_base: &str,
+    go2rtc_api: &str,
+    camera: &str,
+) -> Result<String, AppError> {
+    let public = public_base.trim().trim_end_matches('/');
+    if public.is_empty() || !(public.starts_with("http://") || public.starts_with("https://")) {
+        return Err(AppError::unavailable("stream public_base is not configured"));
+    }
+    let Some(go2rtc) = go2rtc_http_base(go2rtc_api) else {
+        return Err(AppError::unavailable("go2rtc api is not configured"));
+    };
+    let client = hls_client()?;
+    let _ = hls_media_body(&client, &go2rtc, camera).await?;
+    let media_url = HLS_MEDIA_URLS
+        .lock()
+        .await
+        .get(camera)
+        .cloned()
+        .ok_or_else(|| AppError::unavailable("go2rtc 没有这一路画面"))?;
+    let Some(id) = hls_playlist_id(&media_url) else {
+        return Err(AppError::unavailable("go2rtc HLS session id missing"));
+    };
+    Ok(format!("{public}/hls/playlist.m3u8?id={id}"))
+}
+
+fn hls_playlist_id(media_url: &str) -> Option<&str> {
+    let query = media_url.split_once('?')?.1;
+    for part in query.split('&') {
+        if let Some(id) = part.strip_prefix("id=") {
+            if hls_session_id(id) {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
 fn wechat_play_url(public_base: &str, camera: &str) -> Option<String> {
     let base = public_base.trim().trim_end_matches('/');
     if base.is_empty() || !(base.starts_with("http://") || base.starts_with("https://")) {
@@ -834,6 +870,15 @@ mod tests {
             Some("https://rujibao.cn/cam1.m3u8")
         );
         assert_eq!(super::wechat_play_url("  ", "cam1"), None);
+    }
+
+    #[test]
+    fn hls_playlist_id_reads_go2rtc_session() {
+        assert_eq!(
+            super::hls_playlist_id("http://127.0.0.1:1984/api/hls/playlist.m3u8?id=Ab12_Cd"),
+            Some("Ab12_Cd")
+        );
+        assert_eq!(super::hls_playlist_id("hls/playlist.m3u8"), None);
     }
 
     #[test]

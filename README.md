@@ -32,7 +32,7 @@ cargo build --release
 
 公网机器上的 Caddy 听 80 端口，按路径分流：
 
-- `/cam1.m3u8`、`/cam1.flv`、`/hls/*` 转给本机 go2rtc（`127.0.0.1:1984`）。小程序 `<video>` 播 `.m3u8`（不依赖 live-player 类目权限；开发者工具也不支持 live-player）。Caddy 仍会去掉 FLV 的 `Range`，留给以后的 live-player。`rujibao.cn` 已解析到这台机器，正式环境还要开公网 443 并改成 HTTPS。
+- `/cam1.m3u8`、`/cam1.flv`、`/hls/*` 转给本机 go2rtc（`127.0.0.1:1984`）。小程序 `<video>` 播 Vigil `play` 返回的钉住会话地址 `/hls/playlist.m3u8?id=…`（不要每次打 master `/{camera}.m3u8`，否则 go2rtc 新会话卡住首秒，20 秒超时）。Caddy 会去掉 FLV/HLS 的 `Range`。`rujibao.cn` 已解析到这台机器，正式环境还要开公网 443 并改成 HTTPS。
 - `/api/miniprogram/*`、`/api/boarding/records`、`/api/streams`、`/api/streams/*/play`、`/api/feeding`、`/api/watering` 转给 `127.0.0.1:18970`。
 - 其他路径直接回 404，不会进隧道。
 
