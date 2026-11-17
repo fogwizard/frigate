@@ -32,7 +32,7 @@ cargo build --release
 
 公网机器上的 Caddy 听 80 端口，按路径分流：
 
-- `/cam1.flv`、`/cam1.m3u8`、`/hls/*` 转给本机 go2rtc（`127.0.0.1:1984`）。小程序 `live-player` 用 `.flv`；HLS 会话太短，容易一直转圈。
+- `/cam1.flv`、`/cam1.m3u8`、`/hls/*` 转给本机 go2rtc（`127.0.0.1:1984`）。小程序 `live-player` 用 `.flv`；HLS 会话太短，容易一直转圈。Caddy 会去掉 FLV 请求里的 `Range`，否则微信 ExoPlayer 的 `bytes=0-1023` 探测会对上 go2rtc 从头重推的直播流，画面一直转圈。
 - `/api/miniprogram/*`、`/api/boarding/records`、`/api/streams`、`/api/streams/*/play`、`/api/feeding`、`/api/watering` 转给 `127.0.0.1:18970`。
 - 其他路径直接回 404，不会进隧道。
 

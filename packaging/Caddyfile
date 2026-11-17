@@ -21,10 +21,15 @@
 :80 {
 	@flv path_regexp flv ^/([A-Za-z0-9_-]+)\.flv$
 	handle @flv {
+		# WeChat ExoPlayer probes with Range: bytes=0-1023 then bytes=1024-.
+		# go2rtc live FLV ignores Range and always restarts at the FLV header,
+		# so the player aborts and spins. Strip Range and stream from the start.
+		request_header -Range
 		rewrite * /api/stream.flv?src={http.regexp.flv.1}
 		reverse_proxy 127.0.0.1:1984 {
 			flush_interval -1
 			header_up Host {upstream_hostport}
+			header_down -Accept-Ranges
 		}
 	}
 
