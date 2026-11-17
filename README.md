@@ -53,7 +53,7 @@ curl -sS -D - -o /dev/null -X POST http://122.51.106.239/api/miniprogram/login \
 curl -sS -o /dev/null -w '%{http_code}\n' http://122.51.106.239/api/recordings
 ```
 
-登录接口应回到 Vigil（缺 `code` 时是 422）。`/api/recordings` 应是 404，且不会进入隧道。frpc 日志里有 `start proxy success` 才说明隧道已建立。小程序改过 `apiBase` 后要重新编译；页面停在「未登录」且服务器没有新的登录请求，说明点击没有离开手机。
+登录接口应回到 Vigil（缺 `code` 时是 422）。`/api/recordings` 应是 404，且不会进入隧道。frpc 日志里有 `start proxy success` 才说明隧道已建立。登录一直 `502`、且 `data/frpc.log` 出现 `dial tcp 127.0.0.1:17000: connect: connection refused`，说明 SSH 本地转发没起来：`pgrep -lf 'ssh -N'` 应有进程，`nc -z 127.0.0.1 17000` 应成功；没有就 `launchctl kickstart -k gui/$(id -u)/cn.rujibao.frpc`。小程序改过 `apiBase` 后要重新编译；页面停在「未登录」且服务器没有新的登录请求，说明点击没有离开手机。
 
 ## 仓库结构
 

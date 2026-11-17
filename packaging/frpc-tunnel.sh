@@ -25,4 +25,8 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 
-exec /opt/homebrew/bin/frpc -c "$ROOT/config/frpc.toml"
+# Do not exec: bash EXIT traps run before exec and would kill $tunnel.
+# Keep bash as the LaunchAgent process so the trap still cleans SSH when frpc exits.
+/opt/homebrew/bin/frpc -c "$ROOT/config/frpc.toml"
+status=$?
+exit "$status"
