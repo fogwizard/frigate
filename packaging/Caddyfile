@@ -44,4 +44,16 @@
 			header_up Host {upstream_hostport}
 		}
 	}
+
+	# Mini-program login and queries only. 127.0.0.1:18970 is the FRP port on
+	# this machine's loopback, so Vigil's web UI, recordings, and files are not
+	# reachable from the public address.
+	@vigil path /api/miniprogram/* /api/boarding/records /api/streams /api/streams/*/play /api/feeding /api/watering
+	handle @vigil {
+		reverse_proxy 127.0.0.1:18970
+	}
+
+	handle {
+		respond 404
+	}
 }

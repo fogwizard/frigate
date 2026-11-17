@@ -3,9 +3,9 @@ const logger = require("./utils/logger");
 
 App({
   globalData: {
-    // 开发者工具在 Windows 上时，127.0.0.1 指的是那台电脑，连不到这台 Mac。
-    // 播放地址由 /api/streams/{camera}/play 返回 go2rtc HTTP-FLV。
-    apiBase: "http://192.168.1.13:8970",
+    // 与 config/default.yaml 的 stream.public_base 保持一致。
+    // 登录和寄养查询走这台公网机器的 Caddy 白名单，再由 FRP 回到 Mac 的 127.0.0.1:8970。
+    apiBase: "http://122.51.106.239",
     loginPath: "/api/miniprogram/login",
     feedPath: "/api/feeding",
     waterPath: "/api/watering",

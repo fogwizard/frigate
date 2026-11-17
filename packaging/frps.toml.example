@@ -1,0 +1,16 @@
+# frps on the go2rtc machine. The real file is /etc/frp/frps.toml and is not in git.
+# bindAddr is loopback: the cloud firewall drops new public ports, so the Mac
+# reaches this control port through SSH. proxyBindAddr is also loopback, so the
+# tunneled Vigil port is not on the public interface. Caddy allowlists the
+# mini-program paths and is the only public entry.
+
+bindAddr = "127.0.0.1"
+bindPort = 7000
+proxyBindAddr = "127.0.0.1"
+
+auth.method = "token"
+auth.token = "replace-with-the-token-from-config-frpc-toml"
+
+allowPorts = [
+  { start = 18970, end = 18970 },
+]

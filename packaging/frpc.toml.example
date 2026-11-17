@@ -1,0 +1,16 @@
+# Copy to config/frpc.toml (gitignored) and put the same token in both files.
+# serverPort 17000 is the local end of the SSH forward to frps on 127.0.0.1:7000.
+# The proxy dials Vigil on this Mac only, at 127.0.0.1:8970.
+
+serverAddr = "127.0.0.1"
+serverPort = 17000
+
+auth.method = "token"
+auth.token = "replace-with-the-token-from-config-frpc-toml"
+
+[[proxies]]
+name = "vigil-miniprogram"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8970
+remotePort = 18970

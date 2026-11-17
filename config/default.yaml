@@ -104,6 +104,8 @@ events:
 #   url: http://127.0.0.1:9000/hook
 
 web:
+  # 只在本机和局域网监听。不要在路由器上把 8970 映射到公网。
+  # 手机离网后的登录走 Caddy 白名单 + FRP，见 packaging/Caddyfile。
   bind: "0.0.0.0:8970"
 
 # WeChat mini-program video. Caddy on the go2rtc machine turns
@@ -121,7 +123,8 @@ stream:
   restream: true
   # Must match go2rtc rtsp.listen + stream name (publisher)
   publish_url_template: "rtsp://122.51.106.239:8554/{camera}"
-  # 手机播放用的 Caddy 地址，不要带端口，也不要带 ?src=。
+  # 手机播放和登录用的公网地址，不要带端口，也不要带 ?src=。
+  # 小程序 app.js 的 apiBase 必须与这里相同。
   # 域名证书就绪后只改这一行：https://rujibao.cn
   public_base: "http://122.51.106.239"
   path_template: "/{camera}"

@@ -1,0 +1,11 @@
+[Unit]
+Description=frp server for the mini-program API
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.toml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -10,4 +10,5 @@ models/*.pt
 .DS_Store
 *.swp
 .env
+config/frpc.toml
 *.onnx
