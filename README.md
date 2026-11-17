@@ -32,7 +32,7 @@ cargo build --release
 
 公网机器上的 Caddy 听 80 端口，按路径分流：
 
-- `/cam1.m3u8`、`/cam1.flv`、`/hls/*` 转给本机 go2rtc（`127.0.0.1:1984`）。播放列表和分片不经过 Vigil。
+- `/cam1.flv`、`/cam1.m3u8`、`/hls/*` 转给本机 go2rtc（`127.0.0.1:1984`）。小程序 `live-player` 用 `.flv`；HLS 会话太短，容易一直转圈。
 - `/api/miniprogram/*`、`/api/boarding/records`、`/api/streams`、`/api/streams/*/play`、`/api/feeding`、`/api/watering` 转给 `127.0.0.1:18970`。
 - 其他路径直接回 404，不会进隧道。
 

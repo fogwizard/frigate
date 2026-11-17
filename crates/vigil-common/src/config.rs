@@ -551,7 +551,7 @@ pub struct StreamConfig {
     #[serde(default = "default_stream_publish_url")]
     pub publish_url_template: String,
     /// Public origin the phone uses to play video, no trailing slash.
-    /// Caddy on the go2rtc machine serves `/{camera}.m3u8` here.
+    /// Caddy on the go2rtc machine serves `/{camera}.flv` (and `.m3u8`) here.
     /// Replace with `https://rujibao.cn` when that name has a certificate.
     #[serde(default = "default_stream_public_base")]
     pub public_base: String,

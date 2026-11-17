@@ -108,9 +108,9 @@ web:
   # 手机离网后的登录走 Caddy 白名单 + FRP，见 packaging/Caddyfile。
   bind: "0.0.0.0:8970"
 
-# WeChat mini-program video. Caddy on the go2rtc machine turns
-# /{camera}.m3u8 and /{camera}.flv into go2rtc's /api/stream.* URLs.
-# See packaging/Caddyfile. The phone must not be sent this Mac's LAN address.
+# WeChat mini-program video. Caddy turns /{camera}.flv (live-player) and
+# /{camera}.m3u8 into go2rtc /api/stream.* URLs. Play returns the .flv URL.
+# See packaging/Caddyfile. Do not send the phone this Mac's LAN address.
 # 本机能找到 go2rtc 就拉起；找不到则打印远程启动命令，由另一台机器执行。工作目录是项目根目录。
 go2rtc:
   binary: go2rtc
