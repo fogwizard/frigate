@@ -125,7 +125,7 @@ stream:
   publish_url_template: "rtsp://122.51.106.239:8554/{camera}"
   # 手机播放和登录用的公网地址，不要带端口，也不要带 ?src=。
   # 小程序 app.js 的 apiBase 必须与这里相同。
-  public_base: "https://www.rujibao.cn"
+  public_base: "https://rujibao.cn"
   path_template: "/{camera}"
   # 本机网页预览仍走 go2rtc 的 HTTP-FLV，不给小程序用。
   play_url_template: "http://122.51.106.239:1984/api/stream.flv?src={camera}"
