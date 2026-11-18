@@ -82,18 +82,23 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Stop the Mac from idle-sleeping and dropping the camera LAN.
+///
+/// Uses `caffeinate -w <pid>` so the assertion dies with vigil. `-s` only works
+/// on AC power; `-dim` still covers idle/display/disk on battery. Lid-close on
+/// battery can still sleep — keep the Mac plugged in for NVR duty.
 fn keep_awake() {
     #[cfg(target_os = "macos")]
     {
+        let pid = std::process::id().to_string();
         let mut cmd = tokio::process::Command::new("caffeinate");
-        cmd.args(["-ims"])
+        // No death-watch hooks: -w already exits when vigil exits.
+        cmd.args(["-dims", "-w", &pid])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        proc_guard::apply_spawn_hooks(&mut cmd);
         match cmd.spawn() {
             Ok(child) => {
-                info!("caffeinate is holding the Mac awake");
+                info!(%pid, "caffeinate is holding the Mac awake");
                 proc_guard::track_child(&child);
                 std::mem::forget(child);
             }
@@ -144,7 +149,10 @@ async fn run_daemon(config: PathBuf, web_dir: PathBuf) -> anyhow::Result<()> {
     go2rtc::ensure(&cfg, &cwd).await.context("start go2rtc")?;
 
     let infer = Arc::new(infer_client::InferClient::new(cfg.clone())?);
-    infer.ensure_running().await.context("start vigil-infer")?;
+    // Never block API/login/play on ORT cold start. Supervisor keeps retrying.
+    if let Err(e) = infer.ensure_running().await {
+        warn!(error = %e, "vigil-infer not ready yet; web will start anyway");
+    }
     let infer_flag = infer.connected_flag();
     let events = Arc::new(events::EventEngine::new(cfg.clone(), db.clone()));
 

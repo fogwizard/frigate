@@ -180,13 +180,27 @@ fn resolve_model_path(model: &str) -> PathBuf {
 }
 
 fn build_session(path: &Path, preferred: &str) -> Result<(Session, String)> {
-    let _ = preferred;
     let env = ort::init().with_name("vigil").build()?;
-    let session = Session::builder(&env)
-        .context("ort session builder")?
+    let mut builder = Session::builder(&env).context("ort session builder")?;
+
+    // ort's default features enable CoreML on macOS. Cold CoreML compile can take
+    // minutes and used to block vigil-infer from accepting connections. When the
+    // config asks for CPU, pin the CPU EP so startup stays predictable.
+    let device = preferred.trim().to_ascii_uppercase();
+    let label = if device.is_empty() || device == "CPU" {
+        builder = builder
+            .with_execution_providers([ort::ep::CPU::default().build()])
+            .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
+        "CPU"
+    } else {
+        // Leave ORT defaults (may include CoreML) for COREML / AUTO / GPU / etc.
+        preferred
+    };
+
+    let session = builder
         .commit_from_file(path)
         .with_context(|| format!("load onnx {}", path.display()))?;
-    Ok((session, "CPU".into()))
+    Ok((session, label.into()))
 }
 
 fn download_demo_model(dest: &Path) -> Result<()> {

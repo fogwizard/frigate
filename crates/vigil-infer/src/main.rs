@@ -7,6 +7,7 @@ use engine::InferEngine;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 use vigil_common::ipc::{self, InferRequest, InferResponse};
 use vigil_common::shm::FrameRing;
@@ -36,7 +37,8 @@ struct Args {
 }
 
 struct App {
-    engine: InferEngine,
+    /// `None` while the ONNX/CoreML session is still loading.
+    engine: RwLock<Option<InferEngine>>,
     ring: FrameRing,
 }
 
@@ -57,24 +59,73 @@ async fn main() -> anyhow::Result<()> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    let engine = InferEngine::load(&args.model, &args.device, labels, args.threshold)?;
-    info!(
-        device = %engine.device(),
-        model = %args.model,
-        stub = engine.is_stub(),
-        "infer engine ready"
-    );
-
-    // Open existing ring created by vigil (create=false). Retry briefly.
-    let ring = open_ring_retry(&args.shm, args.shm_slots, args.shm_slot_bytes).await?;
-    info!(shm = %args.shm, "opened frame shm ring");
-
-    let app = Arc::new(App { engine, ring });
-
+    // Bind before model load so vigil can connect while ORT/CoreML cold-starts.
     if ipc::is_tcp_endpoint(&args.endpoint) {
-        serve_tcp(&args.endpoint, app).await
+        let listener = TcpListener::bind(&args.endpoint)
+            .await
+            .with_context(|| format!("bind tcp {}", args.endpoint))?;
+        info!(endpoint = %args.endpoint, "vigil-infer listening (tcp); loading engine…");
+
+        let ring = open_ring_retry(&args.shm, args.shm_slots, args.shm_slot_bytes).await?;
+        info!(shm = %args.shm, "opened frame shm ring");
+        let app = Arc::new(App {
+            engine: RwLock::new(None),
+            ring,
+        });
+        tokio::spawn(load_engine(app.clone(), args.model, args.device, labels, args.threshold));
+        serve_tcp(listener, app).await
     } else {
-        serve_unix(&args.endpoint, app).await
+        #[cfg(unix)]
+        {
+            if let Some(parent) = std::path::Path::new(&args.endpoint).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let _ = std::fs::remove_file(&args.endpoint);
+            let listener = UnixListener::bind(&args.endpoint)
+                .with_context(|| format!("bind unix {}", args.endpoint))?;
+            info!(endpoint = %args.endpoint, "vigil-infer listening (unix); loading engine…");
+
+            let ring = open_ring_retry(&args.shm, args.shm_slots, args.shm_slot_bytes).await?;
+            info!(shm = %args.shm, "opened frame shm ring");
+            let app = Arc::new(App {
+                engine: RwLock::new(None),
+                ring,
+            });
+            tokio::spawn(load_engine(app.clone(), args.model, args.device, labels, args.threshold));
+            serve_unix_listener(listener, app).await
+        }
+        #[cfg(not(unix))]
+        {
+            anyhow::bail!(
+                "unix endpoint {} unsupported on this OS; use host:port",
+                args.endpoint
+            );
+        }
+    }
+}
+
+async fn load_engine(
+    app: Arc<App>,
+    model: String,
+    device: String,
+    labels: Vec<String>,
+    threshold: f32,
+) {
+    let result = tokio::task::spawn_blocking(move || {
+        InferEngine::load(&model, &device, labels, threshold)
+    })
+    .await;
+    match result {
+        Ok(Ok(engine)) => {
+            info!(
+                device = %engine.device(),
+                stub = engine.is_stub(),
+                "infer engine ready"
+            );
+            *app.engine.write().await = Some(engine);
+        }
+        Ok(Err(e)) => warn!(error = %e, "infer engine failed to load"),
+        Err(e) => warn!(error = %e, "infer engine load task joined with error"),
     }
 }
 
@@ -98,11 +149,7 @@ async fn open_ring_retry(path: &str, slots: u32, cap: u32) -> anyhow::Result<Fra
     Err(last.unwrap_or_else(|| anyhow::anyhow!("open shm failed")))
 }
 
-async fn serve_tcp(endpoint: &str, app: Arc<App>) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(endpoint)
-        .await
-        .with_context(|| format!("bind tcp {endpoint}"))?;
-    info!(%endpoint, "vigil-infer listening (tcp)");
+async fn serve_tcp(listener: TcpListener, app: Arc<App>) -> anyhow::Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         info!(?peer, "client connected");
@@ -116,14 +163,10 @@ async fn serve_tcp(endpoint: &str, app: Arc<App>) -> anyhow::Result<()> {
 }
 
 #[cfg(unix)]
-async fn serve_unix(endpoint: &str, app: Arc<App>) -> anyhow::Result<()> {
-    if let Some(parent) = std::path::Path::new(endpoint).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let _ = std::fs::remove_file(endpoint);
-    let listener = UnixListener::bind(endpoint)
-        .with_context(|| format!("bind unix {endpoint}"))?;
-    info!(%endpoint, "vigil-infer listening (unix)");
+async fn serve_unix_listener(
+    listener: UnixListener,
+    app: Arc<App>,
+) -> anyhow::Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let app = app.clone();
@@ -133,11 +176,6 @@ async fn serve_unix(endpoint: &str, app: Arc<App>) -> anyhow::Result<()> {
             }
         });
     }
-}
-
-#[cfg(not(unix))]
-async fn serve_unix(endpoint: &str, _app: Arc<App>) -> anyhow::Result<()> {
-    anyhow::bail!("unix endpoint {endpoint} unsupported on this OS; use host:port");
 }
 
 async fn handle_client<S>(mut stream: S, app: Arc<App>) -> anyhow::Result<()>
@@ -153,27 +191,31 @@ where
                 } else {
                     "rgb8"
                 };
-                match app.engine.infer_frame(
-                    fmt,
-                    frame.width,
-                    frame.height,
-                    &frame.data,
-                ) {
-                    Ok(dets) => InferResponse {
-                        detections: dets,
-                        device: app.engine.device().to_string(),
-                        error: None,
-                    },
-                    Err(e) => InferResponse {
+                let engine_guard = app.engine.read().await;
+                if let Some(engine) = engine_guard.as_ref() {
+                    match engine.infer_frame(fmt, frame.width, frame.height, &frame.data) {
+                        Ok(dets) => InferResponse {
+                            detections: dets,
+                            device: engine.device().to_string(),
+                            error: None,
+                        },
+                        Err(e) => InferResponse {
+                            detections: vec![],
+                            device: engine.device().to_string(),
+                            error: Some(e.to_string()),
+                        },
+                    }
+                } else {
+                    InferResponse {
                         detections: vec![],
-                        device: app.engine.device().to_string(),
-                        error: Some(e.to_string()),
-                    },
+                        device: "loading".into(),
+                        error: Some("infer engine still loading".into()),
+                    }
                 }
             }
             Err(e) => InferResponse {
                 detections: vec![],
-                device: app.engine.device().to_string(),
+                device: "unknown".into(),
                 error: Some(format!("shm take: {e}")),
             },
         };
