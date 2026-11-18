@@ -1,29 +1,18 @@
-# WeChat cannot use go2rtc's query-string API or the LAN address.
-# This file runs on the go2rtc machine (122.51.106.239) and exposes:
-#   http://122.51.106.239/cam1.m3u8  →  127.0.0.1:1984/api/stream.m3u8?src=cam1
-#   http://122.51.106.239/cam1.flv   →  127.0.0.1:1984/api/stream.flv?src=cam1
-#   http://122.51.106.239/hls/*      →  127.0.0.1:1984/api/hls/*
+# Phone origin: https://rujibao.cn (TrustAsia cert in /etc/caddy/certs).
+# stream.public_base / miniprogram apiBase must match.
 #
-# The master playlist's relative line "hls/playlist.m3u8?id=…" resolves to /hls/…
-# and that playlist's "segment.ts?…" resolves to /hls/segment.ts. No body rewrite.
+# Tencent may intercept public HTTP/HTTPS for Host rujibao.cn until ICP 备案
+# is cleared (DNSPod webblock). Raw IP on :80 keeps the old allowlist working.
 #
-# The phone-facing origin is stream.public_base in config/default.yaml.
-# It is http://122.51.106.239 today. When the certificate is ready, change
-# that value to https://rujibao.cn and replace this site address `:80`
-# with `rujibao.cn` (delete the auto_https off block so Caddy can issue TLS).
-#
-# Install on the server, then: sudo systemctl reload caddy
+# Install: sudo cp packaging/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
 
 {
-	auto_https off
+	auto_https disable_redirects
 }
 
-:80 {
+(common_routes) {
 	@flv path_regexp flv ^/([A-Za-z0-9_-]+)\.flv$
 	handle @flv {
-		# WeChat ExoPlayer probes with Range: bytes=0-1023 then bytes=1024-.
-		# go2rtc live FLV ignores Range and always restarts at the FLV header,
-		# so the player aborts and spins. Strip Range and stream from the start.
 		request_header -Range
 		rewrite * /api/stream.flv?src={http.regexp.flv.1}
 		reverse_proxy 127.0.0.1:1984 {
@@ -43,8 +32,6 @@
 	}
 
 	handle_path /hls/* {
-		# Same as FLV: WeChat sends Range: bytes=0- on segments; go2rtc live
-		# HLS ignores Range and the player aborts mid-download.
 		request_header -Range
 		rewrite * /api/hls{uri}
 		reverse_proxy 127.0.0.1:1984 {
@@ -54,9 +41,6 @@
 		}
 	}
 
-	# Mini-program login and queries only. 127.0.0.1:18970 is the FRP port on
-	# this machine's loopback, so Vigil's web UI, recordings, and files are not
-	# reachable from the public address.
 	@vigil path /api/miniprogram/* /api/boarding/records /api/streams /api/streams/*/play /api/feeding /api/watering
 	handle @vigil {
 		reverse_proxy 127.0.0.1:18970
@@ -65,4 +49,18 @@
 	handle {
 		respond 404
 	}
+}
+
+rujibao.cn, www.rujibao.cn {
+	tls /etc/caddy/certs/rujibao.cn_bundle.pem /etc/caddy/certs/rujibao.cn.key
+	import common_routes
+}
+
+# IP / plain HTTP. Domain Host names redirect to HTTPS when they reach Caddy.
+:80 {
+	@domain host rujibao.cn www.rujibao.cn
+	handle @domain {
+		redir https://rujibao.cn{uri} permanent
+	}
+	import common_routes
 }

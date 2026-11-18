@@ -12,3 +12,8 @@ models/*.pt
 .env
 config/frpc.toml
 *.onnx
+rujibao.cn_nginx.zip
+rujibao.cn_nginx/
+*.key
+*_bundle.pem
+*_bundle.crt
