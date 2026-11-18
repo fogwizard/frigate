@@ -5,8 +5,7 @@ App({
   globalData: {
     // 与 config/default.yaml 的 stream.public_base 保持一致。
     // 登录和寄养查询走这台公网机器的 Caddy 白名单，再由 FRP 回到 Mac 的 127.0.0.1:8970。
-    // 备案通过前用 IP；通过后改为 https://rujibao.cn（与 public_base 同步）。
-    apiBase: "http://122.51.106.239",
+    apiBase: "https://www.rujibao.cn",
     loginPath: "/api/miniprogram/login",
     feedPath: "/api/feeding",
     waterPath: "/api/watering",
