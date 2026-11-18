@@ -8,6 +8,11 @@
 
 {
 	auto_https disable_redirects
+	# Edge on some networks fails QUIC/HTTP3 with a generic TLS error while
+	# Chrome falls back to TCP. Prefer h1/h2 until 备案/path is stable.
+	servers {
+		protocols h1 h2
+	}
 }
 
 (common_routes) {
