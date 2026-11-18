@@ -224,7 +224,8 @@ impl InferClient {
     async fn connect_with_retry(&self) -> Result<()> {
         let endpoint = self.cfg.infer.endpoint.clone();
         let mut backoff = 1u64;
-        for _ in 0..10 {
+        // CoreML cold compile on Apple Silicon can exceed ~40s; allow ~3 min.
+        for _ in 0..36 {
             match self.try_connect_once().await {
                 Ok(()) => return Ok(()),
                 Err(e) => {
