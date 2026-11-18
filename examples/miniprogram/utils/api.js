@@ -76,7 +76,13 @@ function request(path, options = {}) {
           timedOut();
           return;
         }
-        logger.error("request.network_failed", { ...context, elapsedMs: Date.now() - startedAt, outcome: "failed" });
+        logger.error("request.network_failed", {
+          ...context,
+          elapsedMs: Date.now() - startedAt,
+          outcome: "failed",
+          errMsg: error && error.errMsg,
+          apiBase: app.globalData.apiBase,
+        });
         const failure = new Error(error.errMsg || "网络请求失败");
         failure.code = "NETWORK_ERROR";
         finish(reject, failure);

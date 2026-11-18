@@ -125,7 +125,9 @@ stream:
   publish_url_template: "rtsp://122.51.106.239:8554/{camera}"
   # 手机播放和登录用的公网地址，不要带端口，也不要带 ?src=。
   # 小程序 app.js 的 apiBase 必须与这里相同。
-  public_base: "https://rujibao.cn"
+  # 小程序真机调试暂回 IP：微信对域名 HTTPS 仍 network_failed（未配合法域名/手机 TLS）。
+  # Chrome 浏览器可访问 https://rujibao.cn；正式上线前再改回并配置 request 合法域名。
+  public_base: "http://122.51.106.239"
   path_template: "/{camera}"
   # 本机网页预览仍走 go2rtc 的 HTTP-FLV，不给小程序用。
   play_url_template: "http://122.51.106.239:1984/api/stream.flv?src={camera}"

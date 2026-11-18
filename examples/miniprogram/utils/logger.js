@@ -15,6 +15,13 @@ function write(level, event, details = {}) {
   if (operations.has(details.operation)) fields.operation = details.operation;
   if (outcomes.has(details.outcome)) fields.outcome = details.outcome;
   if (typeof details.requestId === "string" && /^req-\d+-\d+$/.test(details.requestId)) fields.requestId = details.requestId;
+  // WeChat fail() errMsg (e.g. domain allowlist / TLS) — truncate, never log tokens.
+  if (typeof details.errMsg === "string" && details.errMsg) {
+    fields.errMsg = details.errMsg.slice(0, 200);
+  }
+  if (typeof details.apiBase === "string" && /^https?:\/\/[a-z0-9.:-]+$/i.test(details.apiBase)) {
+    fields.apiBase = details.apiBase;
+  }
   const safeEvent = typeof event === "string" && /^[a-z][a-z0-9_.]{0,63}$/.test(event) ? event : "invalid_event";
   console[level](`[miniprogram] ${safeEvent}`, { timestamp: new Date().toISOString(), ...fields });
 }
