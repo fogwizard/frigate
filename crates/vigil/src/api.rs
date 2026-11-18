@@ -31,6 +31,7 @@ pub fn router(state: Arc<AppState>, web_dir: PathBuf) -> Router {
     let data_dir = state.cfg.paths.data_dir.clone();
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/version", get(version))
         .route("/api/status", get(status))
         .route("/api/cameras", get(cameras))
         .route("/api/events", get(events))
@@ -117,6 +118,19 @@ async fn health_status(st: &AppState) -> HealthStatus {
 
 async fn health(State(st): State<Arc<AppState>>) -> Json<HealthStatus> {
     Json(health_status(&st).await)
+}
+
+/// Public, no auth — for HTTPS smoke tests (e.g. https://www.rujibao.cn/api/version).
+async fn version(State(st): State<Arc<AppState>>) -> impl IntoResponse {
+    let body = if st.version.starts_with('v') {
+        st.version.clone()
+    } else {
+        format!("v{}", st.version)
+    };
+    (
+        [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))],
+        body,
+    )
 }
 
 async fn status(State(st): State<Arc<AppState>>) -> Json<StatusResponse> {

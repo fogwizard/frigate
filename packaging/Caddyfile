@@ -41,7 +41,7 @@
 		}
 	}
 
-	@vigil path /api/miniprogram/* /api/boarding/records /api/streams /api/streams/*/play /api/feeding /api/watering
+	@vigil path /api/version /api/miniprogram/* /api/boarding/records /api/streams /api/streams/*/play /api/feeding /api/watering
 	handle @vigil {
 		reverse_proxy 127.0.0.1:18970
 	}
