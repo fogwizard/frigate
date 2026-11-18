@@ -183,18 +183,54 @@ fn build_session(path: &Path, preferred: &str) -> Result<(Session, String)> {
     let env = ort::init().with_name("vigil").build()?;
     let mut builder = Session::builder(&env).context("ort session builder")?;
 
-    // ort's default features enable CoreML on macOS. Cold CoreML compile can take
-    // minutes and used to block vigil-infer from accepting connections. When the
-    // config asks for CPU, pin the CPU EP so startup stays predictable.
+    // Cold CoreML compile can take minutes; vigil-infer binds before this runs.
+    // Cache compiled models so later starts reuse ANE specialization.
     let device = preferred.trim().to_ascii_uppercase();
-    let label = if device.is_empty() || device == "CPU" {
-        builder = builder
-            .with_execution_providers([ort::ep::CPU::default().build()])
-            .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
-        "CPU"
-    } else {
-        // Leave ORT defaults (may include CoreML) for COREML / AUTO / GPU / etc.
-        preferred
+    let label = match device.as_str() {
+        "" | "CPU" => {
+            builder = builder
+                .with_execution_providers([ort::ep::CPU::default().build()])
+                .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
+            "CPU"
+        }
+        "COREML" | "ANE" | "NPU" | "GPU" | "AUTO" => {
+            #[cfg(target_os = "macos")]
+            {
+                let cache = PathBuf::from("data/coreml-cache");
+                let _ = std::fs::create_dir_all(&cache);
+                let coreml = ort::ep::CoreML::default()
+                    .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
+                    .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+                    .with_specialization_strategy(
+                        ort::ep::coreml::SpecializationStrategy::FastPrediction,
+                    )
+                    .with_model_cache_dir(cache.to_string_lossy());
+                builder = builder
+                    .with_execution_providers([
+                        coreml.build(),
+                        ort::ep::CPU::default().build(),
+                    ])
+                    .map_err(|e| anyhow::anyhow!("set CoreML execution provider: {e}"))?;
+                "COREML"
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                tracing::warn!(
+                    requested = %preferred,
+                    "CoreML unavailable on this OS; falling back to CPU"
+                );
+                builder = builder
+                    .with_execution_providers([ort::ep::CPU::default().build()])
+                    .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
+                "CPU"
+            }
+        }
+        _ => {
+            builder = builder
+                .with_execution_providers([ort::ep::CPU::default().build()])
+                .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
+            "CPU"
+        }
     };
 
     let session = builder

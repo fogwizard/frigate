@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.50"
+version = "0.1.51"
 edition = "2021"
 license = "MIT"
 authors = ["Vigil Contributors"]
@@ -43,7 +43,7 @@ tower-http = { version = "0.6", features = ["fs", "cors", "trace", "set-header"]
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
-ort = { version = "=2.0.0-rc.14", default-features = true, features = ["download-binaries", "ndarray", "std"] }
+ort = { version = "=2.0.0-rc.14", default-features = true, features = ["download-binaries", "ndarray", "std", "coreml"] }
 ndarray = "0.17"
 memmap2 = "0.9"
 hmac = "0.12"

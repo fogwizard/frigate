@@ -15,8 +15,8 @@ detect:
   motion_threshold: 0.02
 
 openvino:
-  # device hint (ORT currently uses CPU; GPU EP reserved)
-  device: CPU
+  # macOS: COREML (ANE). Other hosts: CPU. Cold compile is async; cache under data/coreml-cache.
+  device: COREML
   # YOLO11n / YOLOv8 ONNX (export: python scripts/export_model.py)
   # demo: powershell -File scripts/download_demo_model.ps1
   model: models/yolo11n.onnx
