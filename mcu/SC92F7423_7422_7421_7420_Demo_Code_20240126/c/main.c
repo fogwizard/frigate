@@ -4,7 +4,8 @@
 说明：
 1、Options for Target‘Target1’：BL51 Locate->Code Range:0x100，烧录选项请选择DISRST，复位脚作为普通IO使用；
 2、串口1按 SSI1_Test 的 Uart1 方式初始化，9600 8N1，解析喂食器主机下发的 Modbus RTU；
-3、两块板的从站地址用下面的宏区分，本板使用 MODBUS_SLAVE_ADDR。
+3、两块板的从站地址用下面的宏区分，本板使用 MODBUS_SLAVE_ADDR；
+4、E22：M0=P0.6、M1=P0.7，串口初始化后进入模式1（WOR：M1=0 M0=1）。
 ***************************************************************/
 
 /* 第一块喂食器从站 */
@@ -32,6 +33,14 @@
 #define TC118S_REVERSE            2  /* INA=0 INB=1 reverse */
 #define TC118S_BRAKE              3  /* INA=1 INB=1 brake */
 
+/* E22 模式脚：M0=P0.6，M1=P0.7 */
+#define E22_M0                    P06
+#define E22_M1                    P07
+#define E22_MODE_0_TRANSPARENT    0  /* M1=0 M0=0 */
+#define E22_MODE_1_WOR            1  /* M1=0 M0=1 */
+#define E22_MODE_2_CONFIG         2  /* M1=1 M0=0 */
+#define E22_MODE_3_SLEEP          3  /* M1=1 M0=1 */
+
 extern void Uart1_Init(uint Freq, unsigned long int baud);
 extern bit Uart1SendFlag;
 extern bit Uart1_Read(uint8_t *dat);
@@ -42,6 +51,65 @@ static uint8_t modbus_len = 0;
 volatile uint16_t feed_value = 0;
 volatile uint8_t feed_open = 0;
 static uint8_t tc118s_mode[2];
+
+/**************************************************************
+*函数名称：void E22_DelayMs(uint16_t ms)
+*函数功能：粗延时，供模式脚切换后模块稳定
+**************************************************************/
+static void E22_DelayMs(uint16_t ms)
+{
+	uint16_t i;
+	uint16_t j;
+
+	for(i = 0; i < ms; i++)
+	{
+		for(j = 0; j < 900; j++)
+		{
+			;
+		}
+	}
+}
+
+/**************************************************************
+*函数名称：void E22_SetMode(uint8_t mode)
+*函数功能：设置 E22 工作模式（M1/M0）
+*入口参数：mode=E22_MODE_0~3
+**************************************************************/
+static void E22_SetMode(uint8_t mode)
+{
+	switch(mode)
+	{
+		case E22_MODE_1_WOR:
+			E22_M1 = 0;
+			E22_M0 = 1;
+			break;
+		case E22_MODE_2_CONFIG:
+			E22_M1 = 1;
+			E22_M0 = 0;
+			break;
+		case E22_MODE_3_SLEEP:
+			E22_M1 = 1;
+			E22_M0 = 1;
+			break;
+		default:
+			E22_M1 = 0;
+			E22_M0 = 0;
+			break;
+	}
+	/* 模式切换后模块需短暂稳定，手册一般要求约数毫秒 */
+	E22_DelayMs(10);
+}
+
+/**************************************************************
+*函数名称：void E22_Init(void)
+*函数功能：P0.6/P0.7 推挽输出，上电进入模式1（M1=0 M0=1）
+**************************************************************/
+static void E22_Init(void)
+{
+	P0CON |= 0xC0;   /* P0.6/P0.7 push-pull */
+	P0PH  &= ~0xC0;
+	E22_SetMode(E22_MODE_1_WOR);
+}
 
 /**************************************************************
 *函数名称：void TC118S_Init(void)
@@ -240,6 +308,7 @@ void main(void)
 	TC118S_Init();
 	WDTCON |= 0x10;
 	Uart1_Init(16, 9600);
+	E22_Init();  /* 串口就绪后切到模式1：M1=0 M0=1 */
 //0	TC118S_Ctrl(0, TC118S_FORWARD);
 //	TC118S_Ctrl(1, TC118S_FORWARD);
 
