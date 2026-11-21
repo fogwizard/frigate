@@ -1,17 +1,17 @@
 #include "H/Function_Init.H"
 
 /**************************************************************
-ËµÃ÷£º
-1¡¢Options for Target¡®Target1¡¯£ºBL51 Locate->Code Range:0x100£¬ÉÕÂ¼Ñ¡ÏîÇëÑ¡ÔñDISRST£¬¸´Î»½Å×÷ÎªÆÕÍ¨IOÊ¹ÓÃ£»
-2¡¢´®¿Ú1°´ SSI1_Test µÄ Uart1 ·½Ê½³õÊ¼»¯£¬9600 8N1£¬½âÎöÎ¹Ê³Æ÷Ö÷»úÏÂ·¢µÄ Modbus RTU£»
-3¡¢Á½¿é°åµÄ´ÓÕ¾µØÖ·ÓÃÏÂÃæµÄºêÇø·Ö£¬±¾°åÊ¹ÓÃ MODBUS_SLAVE_ADDR¡£
+è¯´æ˜ï¼š
+1ã€Options for Targetâ€˜Target1â€™ï¼šBL51 Locate->Code Range:0x100ï¼Œçƒ§å½•é€‰é¡¹è¯·é€‰æ‹©DISRSTï¼Œå¤ä½è„šä½œä¸ºæ™®é€šIOä½¿ç”¨ï¼›
+2ã€ä¸²å£1æŒ‰ SSI1_Test çš„ Uart1 æ–¹å¼åˆå§‹åŒ–ï¼Œ9600 8N1ï¼Œè§£æå–‚é£Ÿå™¨ä¸»æœºä¸‹å‘çš„ Modbus RTUï¼›
+3ã€ä¸¤å—æ¿çš„ä»ç«™åœ°å€ç”¨ä¸‹é¢çš„å®åŒºåˆ†ï¼Œæœ¬æ¿ä½¿ç”¨ MODBUS_SLAVE_ADDRã€‚
 ***************************************************************/
 
-/* µÚÒ»¿éÎ¹Ê³Æ÷´ÓÕ¾ */
+/* ç¬¬ä¸€å—å–‚é£Ÿå™¨ä»ç«™ */
 #define MODBUS_SLAVE_ADDR_1  0x01
-/* µÚ¶ş¿éÎ¹Ê³Æ÷´ÓÕ¾ */
+/* ç¬¬äºŒå—å–‚é£Ÿå™¨ä»ç«™ */
 #define MODBUS_SLAVE_ADDR_2  0x02
-/* ±¾°åµØÖ·¡£µÚ¶ş¿é°å¸Ä³É MODBUS_SLAVE_ADDR_2 */
+/* æœ¬æ¿åœ°å€ã€‚ç¬¬äºŒå—æ¿æ”¹æˆ MODBUS_SLAVE_ADDR_2 */
 #define MODBUS_SLAVE_ADDR    MODBUS_SLAVE_ADDR_1
 
 #define MODBUS_FC_WRITE_COIL      0x05
@@ -19,15 +19,112 @@
 #define MODBUS_FRAME_LEN          8
 #define FEED_REG_ADDRESS          0x0000
 
+/* TC118S åŒè·¯ï¼šCH0=P1.4/P1.5ï¼ŒCH1=P2.6/P2.7ï¼ŒP1.1=æ€»ç”µæºä½¿èƒ½ */
+#define TC118S_EN                 P11
+#define TC118S_CH0_INA            P14
+#define TC118S_CH0_INB            P15
+#define TC118S_CH1_INA            P26
+#define TC118S_CH1_INB            P27
+#define TC118S_CH0                0
+#define TC118S_CH1                1
+#define TC118S_STOP               0  /* INA=0 INB=0 stop */
+#define TC118S_FORWARD            1  /* INA=1 INB=0 forward */
+#define TC118S_REVERSE            2  /* INA=0 INB=1 reverse */
+#define TC118S_BRAKE              3  /* INA=1 INB=1 brake */
+
 extern void Uart1_Init(uint Freq, unsigned long int baud);
 extern bit Uart1SendFlag;
 extern bit Uart1_Read(uint8_t *dat);
 
 static uint8_t modbus_frame[MODBUS_FRAME_LEN];
 static uint8_t modbus_len = 0;
-/* ×î½üÒ»´ÎĞ´µ½¼Ä´æÆ÷ 0 µÄÖµ¡£feed_open ·Ç 0 ±íÊ¾´ò¿ªÎ¹Ê³Æ÷¡£ */
+/* æœ€è¿‘ä¸€æ¬¡å†™åˆ°å¯„å­˜å™¨ 0 çš„å€¼ã€‚feed_open é 0 è¡¨ç¤ºæ‰“å¼€å–‚é£Ÿå™¨ã€‚ */
 volatile uint16_t feed_value = 0;
 volatile uint8_t feed_open = 0;
+static uint8_t tc118s_mode[2];
+
+/**************************************************************
+*å‡½æ•°åç§°ï¼švoid TC118S_Init(void)
+*å‡½æ•°åŠŸèƒ½ï¼šåŒè·¯ INA/INB ä¸ P1.1 ä½¿èƒ½è„šæ¨æŒ½è¾“å‡ºï¼Œä¸Šç”µåœè½¦
+**************************************************************/
+static void TC118S_Init(void)
+{
+	P1CON |= 0x32;   /* P1.1/P1.4/P1.5 push-pull */
+	P1PH  &= ~0x32;
+	P2CON |= 0xC0;   /* P2.6/P2.7 push-pull */
+	P2PH  &= ~0xC0;
+	TC118S_EN = 0;
+	TC118S_CH0_INA = 0;
+	TC118S_CH0_INB = 0;
+	TC118S_CH1_INA = 0;
+	TC118S_CH1_INB = 0;
+	tc118s_mode[0] = TC118S_STOP;
+	tc118s_mode[1] = TC118S_STOP;
+}
+
+/**************************************************************
+*å‡½æ•°åç§°ï¼švoid TC118S_Ctrl(uint8_t ch, uint8_t mode)
+*å‡½æ•°åŠŸèƒ½ï¼šæ§åˆ¶æŒ‡å®šé€šé“æ­£è½¬/åè½¬/åœè½¦/åˆ¹è½¦ï¼›ä»»ä¸€è·¯é STOP æ—¶æ‰“å¼€ P1.1
+*å…¥å£å‚æ•°ï¼šch=TC118S_CH0/CH1ï¼›mode=STOP/FORWARD/REVERSE/BRAKE
+**************************************************************/
+static void TC118S_Ctrl(uint8_t ch, uint8_t mode)
+{
+	if(ch > TC118S_CH1)
+	{
+		return;
+	}
+
+	if(ch == TC118S_CH0)
+	{
+		switch(mode)
+		{
+			case TC118S_FORWARD:
+				TC118S_CH0_INA = 1;
+				TC118S_CH0_INB = 0;
+				break;
+			case TC118S_REVERSE:
+				TC118S_CH0_INA = 0;
+				TC118S_CH0_INB = 1;
+				break;
+			case TC118S_BRAKE:
+				TC118S_CH0_INA = 1;
+				TC118S_CH0_INB = 1;
+				break;
+			default:
+				TC118S_CH0_INA = 0;
+				TC118S_CH0_INB = 0;
+				mode = TC118S_STOP;
+				break;
+		}
+	}
+	else
+	{
+		switch(mode)
+		{
+			case TC118S_FORWARD:
+				TC118S_CH1_INA = 1;
+				TC118S_CH1_INB = 0;
+				break;
+			case TC118S_REVERSE:
+				TC118S_CH1_INA = 0;
+				TC118S_CH1_INB = 1;
+				break;
+			case TC118S_BRAKE:
+				TC118S_CH1_INA = 1;
+				TC118S_CH1_INB = 1;
+				break;
+			default:
+				TC118S_CH1_INA = 0;
+				TC118S_CH1_INB = 0;
+				mode = TC118S_STOP;
+				break;
+		}
+	}
+
+	tc118s_mode[ch] = mode;
+	TC118S_EN = (tc118s_mode[TC118S_CH0] != TC118S_STOP ||
+	             tc118s_mode[TC118S_CH1] != TC118S_STOP) ? 1 : 0;
+}
 
 static uint16_t modbus_crc(const uint8_t *buf, uint8_t len)
 {
@@ -65,9 +162,9 @@ static void uart1_send(const uint8_t *buf, uint8_t len)
 	}
 }
 
-/* ¹¦ÄÜÂë 0x06£ºĞ´µ¥¸ö¼Ä´æÆ÷£¬value=1 ´ò¿ª£¬value=0 ¹Ø±Õ¡£
-   ¹¦ÄÜÂë 0x05£ºĞ´µ¥¸öÏßÈ¦£¬0xFF00 ´ò¿ª£¬0x0000 ¹Ø±Õ¡£
-   µØÖ·Æ¥ÅäÇÒ CRC ÕıÈ·Ê±»ØÏÔ 8 ×Ö½Ú£¬Ö÷»ú¾İ´ËÈ·ÈÏĞ´Èë¡£ */
+/* åŠŸèƒ½ç  0x06ï¼šå†™å•ä¸ªå¯„å­˜å™¨ï¼Œvalue=1 æ‰“å¼€ï¼Œvalue=0 å…³é—­ã€‚
+   åŠŸèƒ½ç  0x05ï¼šå†™å•ä¸ªçº¿åœˆï¼Œ0xFF00 æ‰“å¼€ï¼Œ0x0000 å…³é—­ã€‚
+   åœ°å€åŒ¹é…ä¸” CRC æ­£ç¡®æ—¶å›æ˜¾ 8 å­—èŠ‚ï¼Œä¸»æœºæ®æ­¤ç¡®è®¤å†™å…¥ã€‚ */
 static void modbus_on_frame(void)
 {
 	uint16_t crc;
@@ -106,6 +203,8 @@ static void modbus_on_frame(void)
 			feed_value = value;
 			feed_open = (value != 0) ? 1 : 0;
 		}
+		/* æ‰“å¼€å–‚é£Ÿå™¨æ­£è½¬ï¼Œå…³é—­åœè½¦ï¼ˆé»˜è®¤æ§åˆ¶ CH0ï¼‰ */
+		TC118S_Ctrl(TC118S_CH0, feed_open ? TC118S_FORWARD : TC118S_STOP);
 	}
 	uart1_send(modbus_frame, MODBUS_FRAME_LEN);
 	modbus_len = 0;
@@ -115,7 +214,7 @@ static void modbus_push(uint8_t byte)
 {
 	uint8_t i;
 
-	if(modbus_len < MODBUS_FRAME_LEN)e
+	if(modbus_len < MODBUS_FRAME_LEN)
 	{
 		modbus_frame[modbus_len++] = byte;
 	}
@@ -138,8 +237,11 @@ void main(void)
 	uint8_t byte;
 
 	IO_Init();
+	TC118S_Init();
 	WDTCON |= 0x10;
 	Uart1_Init(16, 9600);
+//0	TC118S_Ctrl(0, TC118S_FORWARD);
+//	TC118S_Ctrl(1, TC118S_FORWARD);
 
 	while(1)
 	{
