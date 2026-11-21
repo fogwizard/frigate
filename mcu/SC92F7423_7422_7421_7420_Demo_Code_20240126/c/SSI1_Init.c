@@ -107,15 +107,23 @@ void SSI1_Test(void)
 *****************************************************/
 void Uart1_Init(uint Freq,unsigned long int baud)
 {
-	P2CON &= 0xFC;                      //TX/RX设置为输入带上拉
-	P2PH  |= 0x03;
-	
+	unsigned long int reload;
+
+	/* TX=P2.0 强推挽，RX=P2.1 输入上拉。
+	   官方 demo 把 TX/RX 都设成输入上拉，接 E22 时驱动不足，易丢首字节/错码（只收到 7 字节）。 */
+	P2CON |= 0x01;                       // P2.0 TX push-pull
+	P2CON &= ~0x02;                      // P2.1 RX high-Z input
+	P2PH  &= ~0x01;                      // TX no pull
+	P2PH  |= 0x02;                       // RX pull-up
+
 	OTCON |= 0xC0;                       //串行接口SSI1选择Uart1通信
 	SS1CON0 = 0x50;                     //设置通信方式为模式一，允许接收
-	SS1CON1 = Freq*1000000/baud;        //波特率低位控制
-	SS1CON2 = (Freq*1000000/baud)>>8;   //波特率高位控制
+	reload = ((unsigned long int)Freq * 1000000UL) / baud;
+	SS1CON1 = (unsigned char)reload;        //波特率低位
+	SS1CON2 = (unsigned char)(reload >> 8); //波特率高位
+	SS1CON0 &= 0xFC;                     //清 RI/TI，丢掉上电脏数据
 	IE1 |= 0x01;                        //开启SSI中断
-    EA = 1;	
+	EA = 1;
 }
 
 /*****************************************************
