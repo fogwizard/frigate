@@ -281,7 +281,7 @@ impl Bus {
             port: name,
             message: e.to_string(),
         })?;
-        read_frame(&mut open.io, function)
+        read_frame(&mut open.io, function, request)
     }
 }
 
@@ -330,41 +330,54 @@ pub fn write_feed(
     result
 }
 
-fn read_frame(port: &mut impl Read, function: u8) -> Result<Vec<u8>, Error> {
+fn hex_bytes(buf: &[u8]) -> String {
+    buf.iter()
+        .map(|b| format!("0x{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn read_frame(port: &mut impl Read, function: u8, tx: &[u8]) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::with_capacity(64);
     let mut tmp = [0u8; 256];
-    loop {
+    let result = loop {
         match port.read(&mut tmp) {
-            Ok(0) => return Err(Error::Protocol("serial closed".into())),
+            Ok(0) => break Err(Error::Protocol("serial closed".into())),
             Ok(n) => {
                 buf.extend_from_slice(&tmp[..n]);
                 if buf.len() > 256 {
-                    return Err(Error::Protocol("response too long".into()));
+                    break Err(Error::Protocol("response too long".into()));
                 }
-                if let Some(len) = codec::expected_response_len(function, &buf)? {
-                    if buf.len() > len {
-                        return Err(Error::Protocol(format!(
+                match codec::expected_response_len(function, &buf) {
+                    Ok(Some(len)) if buf.len() > len => {
+                        break Err(Error::Protocol(format!(
                             "trailing {} bytes after modbus frame",
                             buf.len() - len
                         )));
                     }
-                    if buf.len() == len {
-                        return Ok(buf);
-                    }
+                    Ok(Some(len)) if buf.len() == len => break Ok(std::mem::take(&mut buf)),
+                    Ok(_) => {}
+                    Err(e) => break Err(e),
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
                 if buf.is_empty() {
-                    return Err(Error::Protocol("modbus response timeout".into()));
+                    break Err(Error::Protocol("modbus response timeout".into()));
                 }
-                return Err(Error::Protocol(format!(
+                break Err(Error::Protocol(format!(
                     "incomplete modbus response ({} bytes)",
                     buf.len()
                 )));
             }
-            Err(e) => return Err(Error::Io(e)),
+            Err(e) => break Err(Error::Io(e)),
         }
-    }
+    };
+    let rx: &[u8] = match &result {
+        Ok(frame) => frame,
+        Err(_) => &buf,
+    };
+    tracing::info!("tx=[{}] rx=[{}]", hex_bytes(tx), hex_bytes(rx));
+    result
 }
 
 #[cfg(test)]
