@@ -364,7 +364,7 @@ pub struct FeedConfig {
     pub port: String,
     #[serde(default = "default_feed_baud")]
     pub baud: u32,
-    /// 0x05 write coil, 0x06 write single register.
+    /// 0x05 write coil, 0x06 write single register, 0x10 write one holding register.
     #[serde(default = "default_feed_function")]
     pub function: u8,
     #[serde(default)]

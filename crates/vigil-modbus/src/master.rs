@@ -291,7 +291,7 @@ pub fn response_timeout(baud: u32) -> Duration {
     Duration::from_millis((500 * 9600 / baud).max(1))
 }
 
-/// Write one feeder frame (function 0x05 or 0x06) and wait for the slave echo.
+/// Write one feeder frame (function 0x05, 0x06, or 0x10) and wait for the slave echo.
 /// An empty `port` records `slave` and does not open a device.
 pub fn write_feed(
     port: &str,
@@ -311,8 +311,10 @@ pub fn write_feed(
     let result = match function {
         function::WRITE_SINGLE_COIL => bus.write_single_coil(slave, address, value != 0),
         function::WRITE_SINGLE_REGISTER => bus.write_single_register(slave, address, value),
+        // This feeder answers 0x10. One register is a quantity-1 write-multiple.
+        function::WRITE_MULTIPLE_REGISTERS => bus.write_multiple_registers(slave, address, &[value]),
         other => Err(Error::Protocol(format!(
-            "unsupported feed function {other:#04x} (use 0x05 or 0x06)"
+            "unsupported feed function {other:#04x} (use 0x05, 0x06, or 0x10)"
         ))),
     };
     if let Err(ref e) = result {
@@ -401,5 +403,11 @@ mod tests {
     fn write_feed_rejects_read_function() {
         let err = write_feed("COM1", 9600, 3, 0x03, 0, 1).unwrap_err();
         assert!(matches!(err, Error::Protocol(_)));
+    }
+
+    #[test]
+    fn write_feed_accepts_function_10_when_the_port_is_closed() {
+        let err = write_feed("COM1", 9600, 1, 0x10, 0, 1).unwrap_err();
+        assert!(err.to_string().contains("not open"), "{err}");
     }
 }
