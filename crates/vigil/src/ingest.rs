@@ -238,6 +238,20 @@ fn detect_vf(cfg: &Config) -> String {
 /// `subtype=0` is the main stream (often H.265). `subtype=1` is the sub stream, usually H.264,
 /// which `-c copy` can publish to go2rtc for the mini-program.
 
+
+fn mfx_runtime_dir() -> Option<std::path::PathBuf> {
+    if std::path::Path::new("/usr/lib/x86_64-linux-gnu/libmfx-gen.so.1.2").exists() {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    let dir = std::path::PathBuf::from(home).join(".local/lib/x86_64-linux-gnu");
+    if dir.join("libmfx-gen.so.1.2").exists() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
 fn push_qsv_decode_args(args: &mut Vec<String>) {
     args.extend([
         "-hwaccel".into(),
@@ -508,6 +522,14 @@ async fn spawn_combined_ffmpeg(
     if qsv {
         // N100 is Alder Lake-N. i965 is also installed and must not win.
         cmd.env("LIBVA_DRIVER_NAME", "iHD");
+        if let Some(dir) = mfx_runtime_dir() {
+            let mut joined = dir.into_os_string();
+            if let Some(existing) = std::env::var_os("LD_LIBRARY_PATH") {
+                joined.push(":");
+                joined.push(existing);
+            }
+            cmd.env("LD_LIBRARY_PATH", joined);
+        }
         info!(device = "/dev/dri/renderD128", "ffmpeg QSV decode via iHD");
     }
     cmd.args(&args)
