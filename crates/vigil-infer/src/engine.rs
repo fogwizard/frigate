@@ -181,62 +181,88 @@ fn resolve_model_path(model: &str) -> PathBuf {
 
 fn build_session(path: &Path, preferred: &str) -> Result<(Session, String)> {
     let env = ort::init().with_name("vigil").build()?;
-    let mut builder = Session::builder(&env).context("ort session builder")?;
-
-    // Cold CoreML compile can take minutes; vigil-infer binds before this runs.
-    // Cache compiled models so later starts reuse ANE specialization.
     let device = preferred.trim().to_ascii_uppercase();
-    let label = match device.as_str() {
-        "" | "CPU" => {
-            builder = builder
-                .with_execution_providers([ort::ep::CPU::default().build()])
-                .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
-            "CPU"
-        }
-        "COREML" | "ANE" | "NPU" | "GPU" | "AUTO" => {
-            #[cfg(target_os = "macos")]
-            {
-                let cache = PathBuf::from("data/coreml-cache");
-                let _ = std::fs::create_dir_all(&cache);
-                let coreml = ort::ep::CoreML::default()
-                    .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
-                    .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
-                    .with_specialization_strategy(
-                        ort::ep::coreml::SpecializationStrategy::FastPrediction,
-                    )
-                    .with_model_cache_dir(cache.to_string_lossy());
-                builder = builder
-                    .with_execution_providers([
-                        coreml.build(),
-                        ort::ep::CPU::default().build(),
-                    ])
-                    .map_err(|e| anyhow::anyhow!("set CoreML execution provider: {e}"))?;
-                "COREML"
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                tracing::warn!(
-                    requested = %preferred,
-                    "CoreML unavailable on this OS; falling back to CPU"
-                );
-                builder = builder
-                    .with_execution_providers([ort::ep::CPU::default().build()])
-                    .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
-                "CPU"
-            }
-        }
-        _ => {
-            builder = builder
-                .with_execution_providers([ort::ep::CPU::default().build()])
-                .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?;
-            "CPU"
-        }
-    };
 
-    let session = builder
+    if device.is_empty() || device == "CPU" {
+        let session = commit_cpu(&env, path)?;
+        return Ok((session, "CPU".into()));
+    }
+
+    // MacBook port keeps CoreML. N100 (Alder Lake-N) uses OpenVINO on the Intel iGPU.
+    #[cfg(target_os = "macos")]
+    {
+        let session = commit_coreml(&env, path)?;
+        return Ok((session, "COREML".into()));
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        match commit_openvino(&env, path) {
+            Ok(session) => return Ok((session, "OPENVINO".into())),
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    "OpenVINO GPU unavailable; falling back to CPU"
+                );
+                let session = commit_cpu(&env, path)?;
+                return Ok((session, "CPU".into()));
+            }
+        }
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        all(target_os = "linux", target_arch = "x86_64")
+    )))]
+    {
+        tracing::warn!(
+            requested = %preferred,
+            "no accelerated execution provider for this host; falling back to CPU"
+        );
+        let session = commit_cpu(&env, path)?;
+        return Ok((session, "CPU".into()));
+    }
+}
+
+fn commit_cpu(env: &ort::environment::Environment, path: &Path) -> Result<Session> {
+    Session::builder(env)
+        .context("ort session builder")?
+        .with_execution_providers([ort::ep::CPU::default().build()])
+        .map_err(|e| anyhow::anyhow!("set CPU execution provider: {e}"))?
         .commit_from_file(path)
-        .with_context(|| format!("load onnx {}", path.display()))?;
-    Ok((session, label.into()))
+        .with_context(|| format!("load onnx {}", path.display()))
+}
+
+#[cfg(target_os = "macos")]
+fn commit_coreml(env: &ort::environment::Environment, path: &Path) -> Result<Session> {
+    let cache = PathBuf::from("data/coreml-cache");
+    let _ = std::fs::create_dir_all(&cache);
+    let coreml = ort::ep::CoreML::default()
+        .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
+        .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+        .with_specialization_strategy(ort::ep::coreml::SpecializationStrategy::FastPrediction)
+        .with_model_cache_dir(cache.to_string_lossy());
+    Session::builder(env)
+        .context("ort session builder")?
+        .with_execution_providers([coreml.build(), ort::ep::CPU::default().build()])
+        .map_err(|e| anyhow::anyhow!("set CoreML execution provider: {e}"))?
+        .commit_from_file(path)
+        .with_context(|| format!("load onnx {}", path.display()))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn commit_openvino(env: &ort::environment::Environment, path: &Path) -> Result<Session> {
+    let cache = PathBuf::from("data/openvino-cache");
+    let _ = std::fs::create_dir_all(&cache);
+    // N100 exposes one Intel iGPU. OpenVINO's GPU device is that UHD Graphics adapter.
+    let openvino = ort::ep::OpenVINO::default()
+        .with_device_type("GPU")
+        .with_cache_dir(cache.to_string_lossy())
+        .with_opencl_throttling(true);
+    Session::builder(env)
+        .context("ort session builder")?
+        .with_execution_providers([openvino.build(), ort::ep::CPU::default().build()])
+        .map_err(|e| anyhow::anyhow!("set OpenVINO execution provider: {e}"))?
+        .commit_from_file(path)
+        .with_context(|| format!("load onnx {} with OpenVINO", path.display()))
 }
 
 fn download_demo_model(dest: &Path) -> Result<()> {

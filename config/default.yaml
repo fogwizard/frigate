@@ -15,8 +15,9 @@ detect:
   motion_threshold: 0.02
 
 openvino:
-  # macOS: COREML (ANE). Other hosts: CPU. Cold compile is async; cache under data/coreml-cache.
-  device: COREML
+  # macOS: CoreML on the Apple Neural Engine. Linux x86_64 (Intel N100): OpenVINO on the iGPU.
+  # GPU, AUTO, COREML, ANE and NPU all select that platform accelerator. CPU stays on the ORT CPU provider.
+  device: GPU
   # YOLO11n / YOLOv8 ONNX (export: python scripts/export_model.py)
   # demo: powershell -File scripts/download_demo_model.ps1
   model: models/yolo11n.onnx
