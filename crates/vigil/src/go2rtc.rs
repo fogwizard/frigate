@@ -33,11 +33,8 @@ pub async fn ensure(cfg: &Config, cwd: &Path) -> Result<()> {
     }
     if locate_binary(&cfg.go2rtc.binary, cwd).is_none() {
         remote_only().store(true, Ordering::Relaxed);
-        let cmd = remote_launch_command(&cfg.go2rtc.config);
-        let project = cwd.display().to_string();
-        warn!(
-            "本机没有找到 go2rtc，请在远程服务器的项目目录中执行:\n  {cmd}\n项目目录: {project}"
-        );
+        let url = api_url(api);
+        warn!(%url, "go2rtc API 连不上");
         return Ok(());
     }
     info!(%api, "go2rtc not listening, starting it");
@@ -70,8 +67,14 @@ pub async fn supervise(cfg: Arc<Config>, cwd: PathBuf) {
         if port_open(&cfg.go2rtc.api).await {
             continue;
         }
+        let url = api_url(&cfg.go2rtc.api);
+        if locate_binary(&cfg.go2rtc.binary, &cwd).is_none() {
+            remote_only().store(true, Ordering::Relaxed);
+            warn!(%url, "go2rtc API 连不上");
+            continue;
+        }
         if let Err(e) = spawn(&cfg, &cwd).await {
-            warn!(error = %e, "go2rtc restart failed");
+            warn!(%url, error = %e, "go2rtc API 连不上，本机拉起失败");
         }
     }
 }
@@ -154,11 +157,23 @@ fn find_on_path(name: &OsStr) -> Option<PathBuf> {
     None
 }
 
+/// `host:port` from config becomes `http://host:port`. A scheme already present is kept.
+fn api_url(api: &str) -> String {
+    let api = api.trim().trim_end_matches('/');
+    if api.starts_with("http://") || api.starts_with("https://") {
+        api.to_string()
+    } else {
+        format!("http://{api}")
+    }
+}
+
 /// Command to run on the machine that hosts go2rtc, from the project directory.
+#[cfg(test)]
 fn remote_launch_command(config: &str) -> String {
     format!("go2rtc --config {}", shell_arg(config))
 }
 
+#[cfg(test)]
 fn shell_arg(value: &str) -> String {
     if value.chars().any(|c| c.is_whitespace()) {
         format!("\"{value}\"")
@@ -203,6 +218,19 @@ mod tests {
             "/cfg/go2rtc.yaml"
         };
         assert_eq!(resolve_under(cwd, abs), Path::new(abs));
+    }
+
+    #[test]
+    fn api_url_is_absolute() {
+        assert_eq!(api_url("122.51.106.239:1984"), "http://122.51.106.239:1984");
+        assert_eq!(
+            api_url("http://122.51.106.239:1984/"),
+            "http://122.51.106.239:1984"
+        );
+        assert_eq!(
+            api_url("https://go2rtc.example:1984"),
+            "https://go2rtc.example:1984"
+        );
     }
 
     #[test]
