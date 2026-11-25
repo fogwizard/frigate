@@ -466,16 +466,24 @@ impl FeedConfig {
 pub struct FfmpegConfig {
     #[serde(default = "default_ffmpeg")]
     pub binary: String,
+    /// Intel Quick Sync. Default on. Linux uses the iHD VA driver on /dev/dri/renderD128.
+    #[serde(default = "default_qsv")]
+    pub qsv: bool,
 }
 
 fn default_ffmpeg() -> String {
     "ffmpeg".into()
 }
 
+fn default_qsv() -> bool {
+    true
+}
+
 impl Default for FfmpegConfig {
     fn default() -> Self {
         Self {
             binary: default_ffmpeg(),
+            qsv: default_qsv(),
         }
     }
 }

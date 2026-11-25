@@ -26,6 +26,8 @@ ffmpeg:
   # 改成你的 ffmpeg 路径；须能拉到下方 cameras 的 RTSP 才有画面。
   # macOS 一般是 PATH 上的 ffmpeg（brew install ffmpeg）。
   binary: ffmpeg
+  # N100 默认用 QSV 硬解。需要系统里的 iHD VA 驱动和 libmfx-gen1.2。false 则纯软件解码。
+  qsv: true
 
 infer:
   # Linux production: /run/vigil/infer.sock

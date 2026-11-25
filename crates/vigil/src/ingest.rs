@@ -237,6 +237,49 @@ fn detect_vf(cfg: &Config) -> String {
 ///
 /// `subtype=0` is the main stream (often H.265). `subtype=1` is the sub stream, usually H.264,
 /// which `-c copy` can publish to go2rtc for the mini-program.
+
+fn push_qsv_decode_args(args: &mut Vec<String>) {
+    args.extend([
+        "-hwaccel".into(),
+        "qsv".into(),
+        "-qsv_device".into(),
+        "/dev/dri/renderD128".into(),
+        "-hwaccel_output_format".into(),
+        "nv12".into(),
+    ]);
+}
+
+fn push_usb_encoder(args: &mut Vec<String>, qsv: bool, low_delay: bool) {
+    if qsv {
+        args.extend([
+            "-c:v".into(),
+            "h264_qsv".into(),
+            "-preset".into(),
+            "veryfast".into(),
+            "-g".into(),
+            "15".into(),
+            "-pix_fmt".into(),
+            "nv12".into(),
+        ]);
+    } else {
+        args.extend([
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "ultrafast".into(),
+            "-tune".into(),
+            "zerolatency".into(),
+            "-g".into(),
+            "15".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+        ]);
+    }
+    if low_delay {
+        args.extend(["-bf".into(), "0".into()]);
+    }
+}
+
 fn push_dahua_rtsp_input_args(args: &mut Vec<String>, source: &str) {
     args.extend([
         "-rtsp_transport".into(),
@@ -362,8 +405,13 @@ async fn spawn_combined_ffmpeg(
         "-nostdin".into(),
     ];
 
+    // QSV decode for the compressed camera. USB is already raw frames.
+    let qsv = cfg.ffmpeg.qsv && cfg!(target_os = "linux");
     match kind {
         SourceKind::Rtsp => {
+            if qsv {
+                push_qsv_decode_args(&mut args);
+            }
             push_dahua_rtsp_input_args(&mut args, source);
         }
         SourceKind::Usb => {
@@ -390,18 +438,7 @@ async fn spawn_combined_ffmpeg(
     // Output 0: recording — copy for RTSP; re-encode for USB.
     args.extend(["-map".into(), "0:v:0".into(), "-an".into()]);
     if usb_mode {
-        args.extend([
-            "-c:v".into(),
-            "libx264".into(),
-            "-preset".into(),
-            "ultrafast".into(),
-            "-tune".into(),
-            "zerolatency".into(),
-            "-g".into(),
-            "15".into(),
-            "-pix_fmt".into(),
-            "yuv420p".into(),
-        ]);
+        push_usb_encoder(&mut args, qsv, false);
     } else {
         args.extend(["-c".into(), "copy".into()]);
     }
@@ -438,20 +475,7 @@ async fn spawn_combined_ffmpeg(
         info!(camera = %camera, %publish, "ffmpeg restream to go2rtc");
         args.extend(["-map".into(), "0:v:0".into()]);
         if usb_mode {
-            args.extend([
-                "-c:v".into(),
-                "libx264".into(),
-                "-preset".into(),
-                "ultrafast".into(),
-                "-tune".into(),
-                "zerolatency".into(),
-                "-bf".into(),
-                "0".into(),
-                "-g".into(),
-                "15".into(),
-                "-pix_fmt".into(),
-                "yuv420p".into(),
-            ]);
+            push_usb_encoder(&mut args, qsv, true);
         } else {
             args.extend(["-c:v".into(), "copy".into()]);
         }
@@ -481,6 +505,11 @@ async fn spawn_combined_ffmpeg(
     }
 
     let mut cmd = Command::new(&cfg.ffmpeg.binary);
+    if qsv {
+        // N100 is Alder Lake-N. i965 is also installed and must not win.
+        cmd.env("LIBVA_DRIVER_NAME", "iHD");
+        info!(device = "/dev/dri/renderD128", "ffmpeg QSV decode via iHD");
+    }
     cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
